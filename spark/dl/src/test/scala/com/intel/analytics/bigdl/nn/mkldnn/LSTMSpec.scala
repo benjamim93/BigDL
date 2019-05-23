@@ -39,7 +39,7 @@ class LSTMSpec extends FlatSpec with Matchers{
     val common_n_layers = 1
     val lstm_n_gates = 4
 
-    val inputFormat = HeapData(Array(seqLength, batchSize, inputSize), Memory.Format.any)
+    val inputFormat = HeapData(Array(seqLength, batchSize, inputSize), Memory.Format.tnc)
     var input = Tensor(Array(seqLength, batchSize, inputSize)).rand()
 
     var initWeight = Tensor[Float](
@@ -57,7 +57,6 @@ class LSTMSpec extends FlatSpec with Matchers{
     val lstm1 = LSTM(inputSize, hiddenSize, f, direction,
       initWeight = initWeight, initWeightIter = initWeightIter, initBias = initBias)
     lstm1.setRuntime(new MklDnnRuntime)
-    lstm1.initMemoryDescs(Array(inputFormat))
     lstm1.initFwdPrimitives(Array(inputFormat), InferencePhase)
     val output1 = lstm1.forward(input)
     println("DNN output Uni Left2Right \n" + output1)
@@ -66,7 +65,6 @@ class LSTMSpec extends FlatSpec with Matchers{
     val lstm2 = LSTM(inputSize, hiddenSize, f, direction,
       initWeight = initWeight, initWeightIter = initWeightIter, initBias = initBias)
     lstm2.setRuntime(new MklDnnRuntime)
-    lstm2.initMemoryDescs(Array(inputFormat))
     lstm2.initFwdPrimitives(Array(inputFormat), InferencePhase)
     val output2 = lstm2.forward(input)
     println("DNN output Uni Right2Left \n" + output2)
@@ -123,6 +121,7 @@ class LSTMSpec extends FlatSpec with Matchers{
     var nn_output2 = nn_model.forward(inputt)
     nn_output2 = reverse.forward(nn_output2).toTensor.transpose(1, 2)
     println("NN output Uni Right2Left \n" + nn_output2)
+    println("==================================================================== \n\n\n")
 
     Equivalent.nearequals(Tools.dense(output2).asInstanceOf[Tensor[Float]],
       nn_output2) should be(true)
@@ -140,7 +139,7 @@ class LSTMSpec extends FlatSpec with Matchers{
     val common_n_layers = 1
     val lstm_n_gates = 4
 
-    val inputFormat = HeapData(Array(seqLength, batchSize, inputSize), Memory.Format.any)
+    val inputFormat = HeapData(Array(seqLength, batchSize, inputSize), Memory.Format.tnc)
     var input = Tensor(Array(seqLength, batchSize, inputSize)).rand()
 
     var initWeight = Tensor[Float](
@@ -158,7 +157,6 @@ class LSTMSpec extends FlatSpec with Matchers{
     val lstm1 = LSTM(inputSize, hiddenSize, f, direction,
       initWeight = initWeight, initWeightIter = initWeightIter, initBias = initBias)
     lstm1.setRuntime(new MklDnnRuntime)
-    lstm1.initMemoryDescs(Array(inputFormat))
     lstm1.initFwdPrimitives(Array(inputFormat), InferencePhase)
     val output1 = lstm1.forward(input)
     println("DNN output Bi Concat \n" + output1)
@@ -222,6 +220,7 @@ class LSTMSpec extends FlatSpec with Matchers{
 
     val nn_output = nn_model.forward(inputt).toTensor.transpose(1, 2)
     println("NN output Bi Concat \n" + nn_output)
+    println("==================================================================== \n\n\n")
 
     Equivalent.nearequals(Tools.dense(output1).asInstanceOf[Tensor[Float]],
       nn_output) should be(true)
@@ -239,7 +238,7 @@ class LSTMSpec extends FlatSpec with Matchers{
     val common_n_layers = 1
     val lstm_n_gates = 4
 
-    val inputFormat = HeapData(Array(seqLength, batchSize, inputSize), Memory.Format.any)
+    val inputFormat = HeapData(Array(seqLength, batchSize, inputSize), Memory.Format.tnc)
     var input = Tensor(Array(seqLength, batchSize, inputSize)).rand()
 
     var initWeight = Tensor[Float](
@@ -257,7 +256,6 @@ class LSTMSpec extends FlatSpec with Matchers{
     val lstm1 = LSTM(inputSize, hiddenSize, f, direction,
       initWeight = initWeight, initWeightIter = initWeightIter, initBias = initBias)
     lstm1.setRuntime(new MklDnnRuntime)
-    lstm1.initMemoryDescs(Array(inputFormat))
     lstm1.initFwdPrimitives(Array(inputFormat), InferencePhase)
     val output1 = lstm1.forward(input)
     println("DNN output Bi Sum \n" + output1)
@@ -321,8 +319,122 @@ class LSTMSpec extends FlatSpec with Matchers{
 
     val nn_output = nn_model.forward(inputt).toTensor.transpose(1, 2)
     println("NN output Bi Sum \n" + nn_output)
+    println("==================================================================== \n\n\n")
 
     Equivalent.nearequals(Tools.dense(output1).asInstanceOf[Tensor[Float]],
       nn_output) should be(true)
+  }
+
+  "LSTM UnidirectionalInferenceMultiLayer updateOutput" should "work correctly" in {
+    val seqLength = 3
+    val batchSize = 2
+    val inputSize = 5
+    val hiddenSize = 5
+
+    val f = AlgKind.EltwiseTanh
+    var direction = Direction.UnidirectionalLeft2Right
+
+    val common_n_layers = 2
+    val lstm_n_gates = 4
+
+    val inputFormat = HeapData(Array(seqLength, batchSize, inputSize), Memory.Format.tnc)
+    var input = Tensor(Array(seqLength, batchSize, inputSize)).rand()
+
+    var initWeight = Tensor[Float](
+      Array(common_n_layers, 1,
+        inputSize, lstm_n_gates, hiddenSize)).rand(-1.0, 1.0)
+
+    var initWeightIter = Tensor[Float](
+      Array(common_n_layers, 1,
+        hiddenSize, lstm_n_gates, hiddenSize)).rand(-1.0, 1.0)
+
+    var initBias = Tensor[Float](
+      Array(common_n_layers, 1,
+        lstm_n_gates, hiddenSize)).rand(-1.0, 1.0)
+
+    val lstm1 = LSTM(inputSize, hiddenSize, f, direction, layers = common_n_layers,
+      initWeight = initWeight, initWeightIter = initWeightIter, initBias = initBias)
+
+    lstm1.setRuntime(new MklDnnRuntime)
+    lstm1.initFwdPrimitives(Array(inputFormat), InferencePhase)
+    val output1 = lstm1.forward(input)
+    println("DNN output Uni Multi-layer Left2Right \n" + output1)
+
+    /*
+    val inputt = input.transpose(1, 2).clone()
+    var initWeight1 = initWeight(1).resize(Array(inputSize, lstm_n_gates, hiddenSize))
+      .transpose(1, 2).transpose(2, 3)
+    var initWeightIter1 = initWeightIter(1).resize(Array(hiddenSize, lstm_n_gates, hiddenSize))
+      .transpose(1, 2).transpose(2, 3)
+    var initBias1 = initBias(1).resize(Array(lstm_n_gates, hiddenSize))
+
+    var initWeight2 = initWeight(2).resize(Array(inputSize, lstm_n_gates, hiddenSize))
+      .transpose(1, 2).transpose(2, 3)
+    var initWeightIter2 = initWeightIter(2).resize(Array(hiddenSize, lstm_n_gates, hiddenSize))
+      .transpose(1, 2).transpose(2, 3)
+    var initBias2 = initBias(2).resize(Array(lstm_n_gates, hiddenSize))
+
+    /**
+      * MKLDNN Gate 1 -> nn/LSTM Gate 1
+      * MKLDNN Gate 2 -> nn/LSTM Gate 3
+      * MKLDNN Gate 3 -> nn/LSTM Gate 2
+      * MKLDNN Gate 4 -> nn/LSTM Gate 4
+      *
+      * uniParams(0) -> input weights
+      * uniParams(1) -> bias
+      * uniParams(2) -> hidden weights
+      */
+
+    val concat = nn.JoinTable(1, 4)
+    initWeight1 = concat.forward(T(initWeight1(1), initWeight1(3),
+      initWeight1(2), initWeight1(4))).asInstanceOf[Tensor[Float]].clone()
+    initWeightIter1 = concat.forward(T(initWeightIter1(1), initWeightIter1(3),
+      initWeightIter1(2), initWeightIter1(4))).asInstanceOf[Tensor[Float]].clone()
+    initBias1 = concat.forward(T(initBias1(1), initBias1(3), initBias1(2), initBias1(4)))
+      .asInstanceOf[Tensor[Float]].clone()
+
+    initWeight2 = concat.forward(T(initWeight2(1), initWeight2(3),
+      initWeight2(2), initWeight2(4))).asInstanceOf[Tensor[Float]].clone()
+    initWeightIter2 = concat.forward(T(initWeightIter2(1), initWeightIter2(3),
+      initWeightIter2(2), initWeightIter2(4))).asInstanceOf[Tensor[Float]].clone()
+    initBias2 = concat.forward(T(initBias2(1), initBias2(3), initBias2(2), initBias2(4)))
+      .asInstanceOf[Tensor[Float]].clone()
+
+    val nn_lstm1 = nn.LSTM(inputSize, hiddenSize)
+    val nn_lstm2 = nn.LSTM(inputSize, hiddenSize)
+    val nn_model = nn.Recurrent().add(nn.Sequential().add(nn_lstm1).add(nn_lstm2))
+
+    val uniParams1 = nn_model.parameters()
+
+    println("here")
+    */
+
+    /*
+    initWeight1 = initWeight1.resizeAs(uniParams1(0))
+    initBias1 = initBias1.resizeAs(uniParams1(1))
+    initWeightIter1 = initWeightIter1.resizeAs(uniParams1(2))
+
+    uniParams1(0).copy(initWeight1)
+    uniParams1(1).copy(initBias1)
+    uniParams1(2).copy(initWeightIter1)
+
+    val uniParams2 = nn_lstm1.parameters()._1
+
+    initWeight2 = initWeight2.resizeAs(uniParams2(0))
+    initBias2 = initBias2.resizeAs(uniParams2(1))
+    initWeightIter2 = initWeightIter2.resizeAs(uniParams2(2))
+
+    uniParams2(0).copy(initWeight2)
+    uniParams2(1).copy(initBias2)
+    uniParams2(2).copy(initWeightIter2)
+
+
+
+    val nn_output = nn_model.forward(inputt).toTensor.transpose(1, 2)
+    println("NN output Uni Multi-layer Left2Right \n" + nn_output)
+
+    Equivalent.nearequals(Tools.dense(output1).asInstanceOf[Tensor[Float]],
+      nn_output) should be(true)
+      */
   }
 }

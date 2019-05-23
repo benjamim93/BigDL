@@ -37,6 +37,7 @@ class LSTM(
   val hiddenSize: Int,
   val f: Int,
   val direction: Int,
+  val layers: Int = 1,
   val flags: Int = RNNCellFlags.RNNCellWithRelu,
   val alpha: Float = 0F,
   val clipping: Float = 0F,
@@ -57,9 +58,9 @@ class LSTM(
   @transient private var updateOutputMemoryPrimitives: Array[Long] = _
   @transient private var updateOutputTensors: Array[Tensor[Float]] = _
 
-  private val common_n_layers: Int = 1
-  private val lstm_n_gates: Int = 4
-  private val lstm_n_states: Int = 2
+  private val common_n_layers: Int = layers
+  private var ngates: Int = _
+  private var nstates: Int = _
 
   private[mkldnn] var weight: TensorMMap = _
   private[mkldnn] var weight_i: TensorMMap = _
@@ -87,17 +88,9 @@ class LSTM(
     }
   }
 
-  private var src_layer: NativeData = _
-  private var src_iter: NativeData = _
-  private var wei_layer: NativeData = _
-  private var wei_iter: NativeData = _
-  private var bis: NativeData = _
-  private var dst: NativeData = _
-  private var dst_iter: NativeData = _
-
-  private[mkldnn] def initMemoryDescs(inputs: Array[MemoryData]) = {
-    val(inputShape, inputLayout) = inputs(0).shape.length match {
-      case 3 => /* tnc */
+  private def initMemoryDescs(inputs: Array[MemoryData]) = {
+    val(inputShape, inputLayout) = inputs(0).layout match {
+      case Memory.Format.tnc => /* tnc */
         (inputs(0).shape, Memory.Format.tnc)
       case _ =>
         throw new UnsupportedOperationException("Not support such input format")
@@ -106,9 +99,9 @@ class LSTM(
     direction match {
       case Direction.UnidirectionalLeft2Right
            | Direction.UnidirectionalRight2Left =>
-        weight = new TensorMMap(Array(common_n_layers, 1, inputSize, lstm_n_gates, hiddenSize))
-        weight_i = new TensorMMap(Array(common_n_layers, 1, hiddenSize, lstm_n_gates, hiddenSize))
-        bias = new TensorMMap(Array(common_n_layers, 1, lstm_n_gates, hiddenSize))
+        weight = new TensorMMap(Array(common_n_layers, 1, inputSize, ngates, hiddenSize))
+        weight_i = new TensorMMap(Array(common_n_layers, 1, hiddenSize, ngates, hiddenSize))
+        bias = new TensorMMap(Array(common_n_layers, 1, ngates, hiddenSize))
 
         {
           val stdv = 1.0 / math.sqrt(hiddenSize)
@@ -121,18 +114,18 @@ class LSTM(
         val biasShape = bias.size() /* ldgo */
         val outputShape = Array(inputShape(0), inputShape(1), hiddenSize) /* tnc */
 
-        val inputShape_iter = Array(common_n_layers, 1, lstm_n_states,
+        val inputShape_iter = Array(common_n_layers, 1, nstates,
             inputs(0).shape(1), hiddenSize) /* ldsnc */
         val weightShape_iter = weight_i.size() /* ldigo */
         val outputShape_iter = inputShape_iter /* ldsnc */
 
-        src_layer = NativeData(inputShape, Memory.Format.any)
-        src_iter = NativeData(inputShape_iter, Memory.Format.any)
-        wei_layer = NativeData(weightShape, Memory.Format.any)
-        wei_iter = NativeData(weightShape_iter, Memory.Format.any)
-        bis = NativeData(biasShape, Memory.Format.any)
-        dst = NativeData(outputShape, Memory.Format.any)
-        dst_iter = NativeData(outputShape_iter, Memory.Format.any)
+        val src_layer = NativeData(inputShape, Memory.Format.any)
+        val src_iter = NativeData(inputShape_iter, Memory.Format.any)
+        val wei_layer = NativeData(weightShape, Memory.Format.any)
+        val wei_iter = NativeData(weightShape_iter, Memory.Format.any)
+        val bis = NativeData(biasShape, Memory.Format.any)
+        val dst = NativeData(outputShape, Memory.Format.any)
+        val dst_iter = NativeData(outputShape_iter, Memory.Format.any)
 
         src_layer_MD = src_layer.getMemoryDescription()
         src_iter_MD = src_iter.getMemoryDescription()
@@ -148,9 +141,9 @@ class LSTM(
         dst_i.dense.copy(Tensor[Float]().resize(outputShape_iter).zero())
 
       case Direction.BidirectionalConcat =>
-        weight = new TensorMMap(Array(common_n_layers, 2, inputSize, lstm_n_gates, hiddenSize))
-        weight_i = new TensorMMap(Array(common_n_layers, 2, hiddenSize, lstm_n_gates, hiddenSize))
-        bias = new TensorMMap(Array(common_n_layers, 2, lstm_n_gates, hiddenSize))
+        weight = new TensorMMap(Array(common_n_layers, 2, inputSize, ngates, hiddenSize))
+        weight_i = new TensorMMap(Array(common_n_layers, 2, hiddenSize, ngates, hiddenSize))
+        bias = new TensorMMap(Array(common_n_layers, 2, ngates, hiddenSize))
 
         {
           val stdv = 1.0 / math.sqrt(hiddenSize)
@@ -163,18 +156,18 @@ class LSTM(
         val biasShape = bias.size() /* ldgo */
         val outputShape = Array(inputShape(0), inputShape(1), 2 * hiddenSize) /* tnc */
 
-        val inputShape_iter = Array(common_n_layers, 2, lstm_n_states,
+        val inputShape_iter = Array(common_n_layers, 2, nstates,
             inputs(0).shape(1), hiddenSize) /* ldsnc */
         val weightShape_iter = weight_i.size() /* ldigo */
         val outputShape_iter = inputShape_iter /* ldsnc */
 
-        src_layer = NativeData(inputShape, Memory.Format.any)
-        src_iter = NativeData(inputShape_iter, Memory.Format.any)
-        wei_layer = NativeData(weightShape, Memory.Format.any)
-        wei_iter = NativeData(weightShape_iter, Memory.Format.any)
-        bis = NativeData(biasShape, Memory.Format.any)
-        dst = NativeData(outputShape, Memory.Format.any)
-        dst_iter = NativeData(outputShape_iter, Memory.Format.any)
+        val src_layer = NativeData(inputShape, Memory.Format.any)
+        val src_iter = NativeData(inputShape_iter, Memory.Format.any)
+        val wei_layer = NativeData(weightShape, Memory.Format.any)
+        val wei_iter = NativeData(weightShape_iter, Memory.Format.any)
+        val bis = NativeData(biasShape, Memory.Format.any)
+        val dst = NativeData(outputShape, Memory.Format.any)
+        val dst_iter = NativeData(outputShape_iter, Memory.Format.any)
 
         src_layer_MD = src_layer.getMemoryDescription()
         src_iter_MD = src_iter.getMemoryDescription()
@@ -190,9 +183,9 @@ class LSTM(
         dst_i.dense.copy(Tensor[Float]().resize(outputShape_iter).zero())
 
       case Direction.BidirectionalSum =>
-        weight = new TensorMMap(Array(common_n_layers, 2, inputSize, lstm_n_gates, hiddenSize))
-        weight_i = new TensorMMap(Array(common_n_layers, 2, hiddenSize, lstm_n_gates, hiddenSize))
-        bias = new TensorMMap(Array(common_n_layers, 2, lstm_n_gates, hiddenSize))
+        weight = new TensorMMap(Array(common_n_layers, 2, inputSize, ngates, hiddenSize))
+        weight_i = new TensorMMap(Array(common_n_layers, 2, hiddenSize, ngates, hiddenSize))
+        bias = new TensorMMap(Array(common_n_layers, 2, ngates, hiddenSize))
 
         {
           val stdv = 1.0 / math.sqrt(hiddenSize)
@@ -205,18 +198,18 @@ class LSTM(
         val biasShape = bias.size() /* ldgo */
         val outputShape = Array(inputShape(0), inputShape(1), hiddenSize) /* tnc */
 
-        val inputShape_iter = Array(common_n_layers, 2, lstm_n_states,
+        val inputShape_iter = Array(common_n_layers, 2, nstates,
           inputs(0).shape(1), hiddenSize) /* ldsnc */
         val weightShape_iter = weight_i.size() /* ldigo */
         val outputShape_iter = inputShape_iter /* ldsnc */
 
-        src_layer = NativeData(inputShape, Memory.Format.any)
-        src_iter = NativeData(inputShape_iter, Memory.Format.any)
-        wei_layer = NativeData(weightShape, Memory.Format.any)
-        wei_iter = NativeData(weightShape_iter, Memory.Format.any)
-        bis = NativeData(biasShape, Memory.Format.any)
-        dst = NativeData(outputShape, Memory.Format.any)
-        dst_iter = NativeData(outputShape_iter, Memory.Format.any)
+        val src_layer = NativeData(inputShape, Memory.Format.any)
+        val src_iter = NativeData(inputShape_iter, Memory.Format.any)
+        val wei_layer = NativeData(weightShape, Memory.Format.any)
+        val wei_iter = NativeData(weightShape_iter, Memory.Format.any)
+        val bis = NativeData(biasShape, Memory.Format.any)
+        val dst = NativeData(outputShape, Memory.Format.any)
+        val dst_iter = NativeData(outputShape_iter, Memory.Format.any)
 
         src_layer_MD = src_layer.getMemoryDescription()
         src_iter_MD = src_iter.getMemoryDescription()
@@ -238,11 +231,16 @@ class LSTM(
   override private[mkldnn] def initFwdPrimitives(inputs: Array[MemoryData], phase: Phase) = {
     val rnnCellDesc = MklDnn.RNNCellDescInit(AlgKind.VanillaLstm, f, flags, alpha, clipping)
 
+    ngates = MklDnn.RNNCellGetGatesCount(rnnCellDesc)
+    nstates = MklDnn.RNNCellGetStatesCount(rnnCellDesc)
+
     val kind = if (phase == InferencePhase) {
       PropKind.ForwardInference
     } else {
       throw new UnsupportedOperationException("Not support training")
     }
+
+    initMemoryDescs(inputs)
 
     val description = MklDnn.RNNForwardDescInit(kind, rnnCellDesc, direction, src_layer_MD,
       src_iter_MD, weights_layer_MD, weights_iter_MD, bias_MD, dist_layer_MD, dist_iter_MD)
@@ -281,6 +279,26 @@ class LSTM(
     src_i.sync()
     dst_i.sync()
 
+    /*
+    println("==============================================")
+    println("realSrc format: " + realSrc.layout)
+    println("realSrc_iter format: " + realSrc_iter.layout)
+    println("realWei format: " + realWei.layout)
+    println("realWei_iter format: " + realWei_iter.layout)
+    println("realBias format: " + realBias.layout)
+    println("realDst format: " + realDst.layout)
+    println("realDst_iter format: " + realDst_iter.layout)
+    println("..............................................")
+    println("realSrc shape: " + realSrc.shape.toList)
+    println("realSrc_iter shape: " + realSrc_iter.shape.toList)
+    println("realWei shape: " + realWei.shape.toList)
+    println("realWei_iter shape: " + realWei_iter.shape.toList)
+    println("realBias shape: " + realBias.shape.toList)
+    println("realDst shape: " + realDst.shape.toList)
+    println("realDst_iter shape: " + realDst_iter.shape.toList)
+    println("==============================================")
+    */
+
     val srcs = Array(realSrc.getPrimitive(runtime), realSrc_iter.getPrimitive(runtime),
       realWei.getPrimitive(runtime), realWei_iter.getPrimitive(runtime),
       realBias.getPrimitive(runtime))
@@ -301,6 +319,7 @@ class LSTM(
   }
 
   override def updateOutput(input: Activity): Activity = {
+//    val start1 = System.nanoTime()
     if (updateOutputTensors == null) {
       val buffer = new ArrayBuffer[Tensor[Float]]()
       buffer.append(input.asInstanceOf[Tensor[Float]])
@@ -316,9 +335,16 @@ class LSTM(
 
     updateWithNewTensor(updateOutputTensors, 0, input)
 
+//    val start2 = System.nanoTime()
     MklDnnOps.streamSubmit(runtime.stream, 1, updateOutputPrimitives, updateOutputPrimitives.length,
       updateOutputMemoryPrimitives, updateOutputTensors)
-
+//    val end2 = System.nanoTime()
+//    val end1 = System.nanoTime()
+//    val period1 = end1 - start1
+//    val period2 = end2 - start2
+//    println("streamSubmit() time consumption" + (period2))
+//    println("updateOutput() time consumption" + (period1))
+//    println("s/u portion: " + period2.floatValue()/period1.floatValue())
     output
   }
 
@@ -333,12 +359,13 @@ object LSTM{
    hiddenSize: Int,
    f: Int,
    direction: Int,
+   layers: Int = 1,
    flags: Int = RNNCellFlags.RNNCellWithRelu,
    alpha: Float = 0F,
    clipping: Float = 0F,
    initWeight: Tensor[Float] = null,
    initWeightIter: Tensor[Float] = null,
    initBias: Tensor[Float] = null
- ): LSTM = new LSTM(inputSize, hiddenSize, f, direction, flags, alpha,
+ ): LSTM = new LSTM(inputSize, hiddenSize, f, direction, layers, flags, alpha,
     clipping, initWeight, initWeightIter, initBias)
 }

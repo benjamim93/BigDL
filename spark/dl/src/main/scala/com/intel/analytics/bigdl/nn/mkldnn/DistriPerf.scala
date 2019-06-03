@@ -422,7 +422,16 @@ object DistriPerf {
         if(params.blasModelType == "biconcat1") {
           val nn_model2 = nn.BiRecurrent[Float](nn.JoinTable[Float](3, 0)
             .asInstanceOf[AbstractModule[Table, Tensor[Float], Float]])
-            .add(nn.LSTM(params.commonSize, params.commonSize))
+
+          val lstm = nn.Recurrent().add(nn.LSTM(params.commonSize, params.commonSize))
+
+          val dir1 = nn.Sequential()
+          dir1.add(lstm)
+
+          nn_model2.layer = dir1
+          nn_model2.revLayer = dir1.cloneModule()
+          nn_model2.init()
+
           threadPredict(params, sc, nn_model2)
           println("[Bi Concat 1 layer] result\n\n ")
         }
@@ -430,7 +439,16 @@ object DistriPerf {
         if(params.blasModelType == "bisum1") {
           val nn_model3 = nn.BiRecurrent[Float](nn.CAddTable()
             .asInstanceOf[AbstractModule[Table, Tensor[Float], Float]])
-            .add(nn.LSTM(params.commonSize, params.commonSize))
+
+          val lstm = nn.Recurrent().add(nn.LSTM(params.commonSize, params.commonSize))
+
+          val dir1 = nn.Sequential()
+          dir1.add(lstm)
+
+          nn_model3.layer = dir1
+          nn_model3.revLayer = dir1.cloneModule()
+          nn_model3.init()
+
           threadPredict(params, sc, nn_model3)
           println("[Bi Sum 1 layer] result\n\n ")
         }
@@ -450,7 +468,7 @@ object DistriPerf {
           println("[Uni L2R 5 layers] result\n\n ")
         }
 
-        if(params.blasModelType == "bisuml5") {
+        if(params.blasModelType == "bisum5") {
           val nn_model5 = nn.BiRecurrent[Float](nn.CAddTable()
             .asInstanceOf[AbstractModule[Table, Tensor[Float], Float]])
 
@@ -460,12 +478,6 @@ object DistriPerf {
           val lstm1_4 = nn.Recurrent().add(nn.LSTM(params.commonSize, params.commonSize))
           val lstm1_5 = nn.Recurrent().add(nn.LSTM(params.commonSize, params.commonSize))
 
-          val lstm2_1 = nn.Recurrent().add(nn.LSTM(params.commonSize, params.commonSize))
-          val lstm2_2 = nn.Recurrent().add(nn.LSTM(params.commonSize, params.commonSize))
-          val lstm2_3 = nn.Recurrent().add(nn.LSTM(params.commonSize, params.commonSize))
-          val lstm2_4 = nn.Recurrent().add(nn.LSTM(params.commonSize, params.commonSize))
-          val lstm2_5 = nn.Recurrent().add(nn.LSTM(params.commonSize, params.commonSize))
-
           val dir1 = nn.Sequential()
           dir1
             .add(lstm1_1)
@@ -474,16 +486,8 @@ object DistriPerf {
             .add(lstm1_4)
             .add(lstm1_5)
 
-          val dir2 = nn.Sequential()
-          dir2
-            .add(lstm2_1)
-            .add(lstm2_2)
-            .add(lstm2_3)
-            .add(lstm2_4)
-            .add(lstm2_5)
-
           nn_model5.layer = dir1
-          nn_model5.revLayer = dir2
+          nn_model5.revLayer = dir1.cloneModule()
           nn_model5.init()
 
           threadPredict(params, sc, nn_model5)

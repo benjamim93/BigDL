@@ -42,8 +42,8 @@ class BiRecurrent[T : ClassTag] (
 
   val timeDim = 2
   val featDim = 3
-  val layer: Recurrent[T] = Recurrent[T](batchNormParams)
-  val revLayer: Recurrent[T] = Recurrent[T](batchNormParams)
+  var layer: Sequential[T] = _ // Recurrent[T](batchNormParams)
+  var revLayer: Sequential[T] = _ // Recurrent[T](batchNormParams)
 
   private var birnn = Sequential[T]()
 
@@ -55,15 +55,17 @@ class BiRecurrent[T : ClassTag] (
       .add(Identity[T]()))
   }
 
-  birnn
-    .add(ParallelTable[T]()
-      .add(layer)
-      .add(Sequential[T]()
-        .add(Reverse[T](timeDim))
-        .add(revLayer)
-        .add(Reverse[T](timeDim))))
-  if (merge == null) birnn.add(CAddTable[T](true))
-  else birnn.add(merge)
+  def init(): Unit = {
+    birnn
+      .add(ParallelTable[T]()
+        .add(layer)
+        .add(Sequential[T]()
+          .add(Reverse[T](timeDim))
+          .add(revLayer)
+          .add(Reverse[T](timeDim))))
+    if (merge == null) birnn.add(CAddTable[T](true))
+    else birnn.add(merge)
+  }
 
   override def add(module: AbstractModule[_ <: Activity, _ <: Activity, T]): this.type = {
     layer.add(module)

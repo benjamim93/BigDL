@@ -183,9 +183,12 @@ class LSTMSpec extends FlatSpec with Matchers{
     initBias(2) = concat.forward(T(initBias(2)(1), initBias(2)(3),
       initBias(2)(2), initBias(2)(4))).asInstanceOf[Tensor[Float]].clone()
 
+    val layer = nn.Sequential().add(nn.Recurrent().add(nn.LSTM(inputSize, hiddenSize)))
     val nn_model = nn.BiRecurrent[Float](nn.JoinTable[Float](3, 0)
       .asInstanceOf[AbstractModule[Table, Tensor[Float], Float]])
-      .add(nn.LSTM(inputSize, hiddenSize))
+    nn_model.layer = layer
+    nn_model.revLayer = layer.cloneModule()
+    nn_model.init()
 
     /**
       * biParams(0 - 2) and (3 - 5) are for the two directions respectively
@@ -282,9 +285,12 @@ class LSTMSpec extends FlatSpec with Matchers{
     initBias(2) = concat.forward(T(initBias(2)(1), initBias(2)(3),
       initBias(2)(2), initBias(2)(4))).asInstanceOf[Tensor[Float]].clone()
 
+    val layer = nn.Sequential().add(nn.Recurrent().add(nn.LSTM(inputSize, hiddenSize)))
     val nn_model = nn.BiRecurrent[Float](nn.CAddTable()
       .asInstanceOf[AbstractModule[Table, Tensor[Float], Float]])
-      .add(nn.LSTM(inputSize, hiddenSize))
+    nn_model.layer = layer
+    nn_model.revLayer = layer.cloneModule()
+    nn_model.init()
 
     /**
       * biParams(0 - 2) and (3 - 5) are for the two directions respectively
@@ -436,5 +442,147 @@ class LSTMSpec extends FlatSpec with Matchers{
     Equivalent.nearequals(Tools.dense(output1).asInstanceOf[Tensor[Float]],
       nn_output) should be(true)
       */
+  }
+
+  "LSTM BidirectionalInferenceMultiLayer updateOutput" should "work correctly" in {
+    val seqLength = 3
+    val batchSize = 2
+    val inputSize = 5
+    val hiddenSize = 5
+
+    val f = AlgKind.EltwiseTanh
+    var direction = Direction.BidirectionalSum
+
+    val common_n_layers = 2
+    val lstm_n_gates = 4
+
+    val inputFormat = HeapData(Array(seqLength, batchSize, inputSize), Memory.Format.tnc)
+    var input = Tensor(Array(seqLength, batchSize, inputSize)).rand()
+
+    var initWeight = Tensor[Float](
+      Array(common_n_layers, 2,
+        inputSize, lstm_n_gates, hiddenSize)).rand(-1.0, 1.0)
+
+    var initWeightIter = Tensor[Float](
+      Array(common_n_layers, 2,
+        hiddenSize, lstm_n_gates, hiddenSize)).rand(-1.0, 1.0)
+
+    var initBias = Tensor[Float](
+      Array(common_n_layers, 2,
+        lstm_n_gates, hiddenSize)).rand(-1.0, 1.0)
+
+    val lstm1 = LSTM(inputSize, hiddenSize, f, direction, layers = common_n_layers,
+      initWeight = initWeight, initWeightIter = initWeightIter, initBias = initBias)
+
+    lstm1.setRuntime(new MklDnnRuntime)
+    lstm1.initFwdPrimitives(Array(inputFormat), InferencePhase)
+    val output1 = lstm1.forward(input)
+    println("DNN output Bi Multi-layer Sum \n" + output1)
+
+
+    val inputt = input.transpose(1, 2).clone()
+    initWeight = initWeight
+      .resize(Array(common_n_layers, 2, inputSize, lstm_n_gates, hiddenSize))
+      .transpose(1, 2).transpose(3, 4).transpose(4, 5)
+    initWeightIter = initWeightIter
+      .resize(Array(common_n_layers, 2, hiddenSize, lstm_n_gates, hiddenSize))
+      .transpose(1, 2).transpose(3, 4).transpose(4, 5)
+    initBias = initBias.transpose(1, 2)
+
+    val initWeight0 = Tensor[Float](Array(2, common_n_layers, inputSize * lstm_n_gates, hiddenSize))
+    val initWeightIter0 = Tensor[Float](
+      Array(2, common_n_layers, inputSize * lstm_n_gates, hiddenSize))
+    val initBias0 = Tensor[Float](2, common_n_layers, lstm_n_gates * hiddenSize)
+
+    val concat = nn.JoinTable(1, 4)
+    initWeight0(1)(1) = concat.forward(T(initWeight(1)(1)(1), initWeight(1)(1)(3),
+      initWeight(1)(1)(2), initWeight(1)(1)(4))).asInstanceOf[Tensor[Float]].clone()
+    initWeightIter0(1)(1) = concat.forward(T(initWeightIter(1)(1)(1), initWeightIter(1)(1)(3),
+      initWeightIter(1)(1)(2), initWeightIter(1)(1)(4))).asInstanceOf[Tensor[Float]].clone()
+    initBias0(1)(1) = concat.forward(T(initBias(1)(1)(1), initBias(1)(1)(3),
+      initBias(1)(1)(2), initBias(1)(1)(4))).asInstanceOf[Tensor[Float]].clone()
+
+    initWeight0(1)(2) = concat.forward(T(initWeight(1)(2)(1), initWeight(1)(2)(3),
+      initWeight(1)(2)(2), initWeight(1)(2)(4))).asInstanceOf[Tensor[Float]].clone()
+    initWeightIter0(1)(2) = concat.forward(T(initWeightIter(1)(2)(1), initWeightIter(1)(2)(3),
+      initWeightIter(1)(2)(2), initWeightIter(1)(2)(4))).asInstanceOf[Tensor[Float]].clone()
+    initBias0(1)(2) = concat.forward(T(initBias(1)(2)(1), initBias(1)(2)(3),
+      initBias(1)(2)(2), initBias(1)(2)(4))).asInstanceOf[Tensor[Float]].clone()
+
+    initWeight0(2)(1) = concat.forward(T(initWeight(2)(1)(1), initWeight(2)(1)(3),
+      initWeight(2)(1)(2), initWeight(2)(1)(4))).asInstanceOf[Tensor[Float]].clone()
+    initWeightIter0(2)(1) = concat.forward(T(initWeightIter(2)(1)(1), initWeightIter(2)(1)(3),
+      initWeightIter(2)(1)(2), initWeightIter(2)(1)(4))).asInstanceOf[Tensor[Float]].clone()
+    initBias0(2)(1) = concat.forward(T(initBias(2)(1)(1), initBias(2)(1)(3),
+      initBias(2)(1)(2), initBias(2)(1)(4))).asInstanceOf[Tensor[Float]].clone()
+
+    initWeight0(2)(2) = concat.forward(T(initWeight(2)(2)(1), initWeight(2)(2)(3),
+      initWeight(2)(2)(2), initWeight(2)(2)(4))).asInstanceOf[Tensor[Float]].clone()
+    initWeightIter0(2)(2) = concat.forward(T(initWeightIter(2)(2)(1), initWeightIter(2)(2)(3),
+      initWeightIter(2)(2)(2), initWeightIter(2)(2)(4))).asInstanceOf[Tensor[Float]].clone()
+    initBias0(2)(2) = concat.forward(T(initBias(2)(2)(1), initBias(2)(2)(3),
+      initBias(2)(2)(2), initBias(2)(2)(4))).asInstanceOf[Tensor[Float]].clone()
+
+    val nn_model2 = nn.BiRecurrent[Float](nn.CAddTable()
+      .asInstanceOf[AbstractModule[Table, Tensor[Float], Float]])
+
+    val lstm1_1 = nn.Recurrent().add(nn.LSTM(inputSize, hiddenSize))
+    val lstm1_2 = nn.Recurrent().add(nn.LSTM(inputSize, hiddenSize))
+
+    val lstm2_1 = nn.Recurrent().add(nn.LSTM(inputSize, hiddenSize))
+    val lstm2_2 = nn.Recurrent().add(nn.LSTM(inputSize, hiddenSize))
+
+    val dir1 = nn.Sequential()
+    dir1
+      .add(lstm1_1)
+      .add(lstm1_2)
+
+    val dir2 = nn.Sequential()
+    dir2
+      .add(lstm2_1)
+      .add(lstm2_2)
+
+    nn_model2.layer = dir1
+    nn_model2.revLayer = dir2
+    nn_model2.init()
+
+    val biParams = nn_model2.parameters()._1
+    initWeight0(1)(1).resizeAs(biParams(0))
+    initBias0(1)(1).resizeAs(biParams(1))
+    initWeightIter0(1)(1).resizeAs(biParams(2))
+
+    initWeight0(1)(2).resizeAs(biParams(3))
+    initBias0(1)(2).resizeAs(biParams(4))
+    initWeightIter0(1)(2).resizeAs(biParams(5))
+
+    initWeight0(2)(1).resizeAs(biParams(6))
+    initBias0(2)(1).resizeAs(biParams(7))
+    initWeightIter0(2)(1).resizeAs(biParams(8))
+
+    initWeight0(2)(2).resizeAs(biParams(9))
+    initBias0(2)(2).resizeAs(biParams(10))
+    initWeightIter0(2)(2).resizeAs(biParams(11))
+
+    biParams(0).copy(initWeight0(1)(1))
+    biParams(1).copy(initBias0(1)(1))
+    biParams(2).copy(initWeightIter0(1)(1))
+
+    biParams(3).copy(initWeight0(1)(2))
+    biParams(4).copy(initBias0(1)(2))
+    biParams(5).copy(initWeightIter0(1)(2))
+
+    biParams(6).copy(initWeight0(2)(1))
+    biParams(7).copy(initBias0(2)(1))
+    biParams(8).copy(initWeightIter0(2)(1))
+
+    biParams(9).copy(initWeight0(2)(2))
+    biParams(10).copy(initBias0(2)(2))
+    biParams(11).copy(initWeightIter0(2)(2))
+
+    val nn_output = nn_model2.forward(inputt).toTensor.transpose(1, 2)
+    println("NN output Bi Multi-layer sum \n" + nn_output)
+
+    Equivalent.nearequals(Tools.dense(output1).asInstanceOf[Tensor[Float]],
+      nn_output) should be(true)
   }
 }

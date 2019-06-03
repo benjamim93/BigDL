@@ -27,6 +27,7 @@ import com.intel.analytics.bigdl.example.loadmodel.AlexNet
 import com.intel.analytics.bigdl.mkl.{AlgKind, Direction, Memory}
 import com.intel.analytics.bigdl.models.inception.Inception_v1_NoAuxClassifier
 import com.intel.analytics.bigdl.models.lenet.LeNet5
+import com.intel.analytics.bigdl.nn
 // import com.intel.analytics.bigdl.models.resnet.ResNet
 import com.intel.analytics.bigdl.models.resnet.ResNet.{DatasetType, ShortcutType}
 import com.intel.analytics.bigdl.models.utils.ModelBroadcast
@@ -53,15 +54,6 @@ import scala.reflect.ClassTag
 import com.intel.analytics.bigdl.nn
 
 object DistriPerf {
-  /*
-  val seqLength = 300
-  val inputSize = 800
-  val hiddenSize = 800
-  */
-
-  val common_n_layers = 1
-  val lstm_n_gates = 4
-
   val logger = Logger.getLogger(getClass)
 
   val parser = new OptionParser[DistriPerfParams]("BigDL w/ Dnn Local Model Performance Test") {
@@ -89,6 +81,9 @@ object DistriPerf {
     opt[String]('x', "threadNum")
       .text("Number of threads")
       .action((v, p) => p.copy(threadNum = v))
+    opt[String]('m', "blasModelType")
+      .text("Type of blas model")
+      .action((v, p) => p.copy(blasModelType = v))
   }
 
   def getTopTimes(times: Array[(AbstractModule[_ <: Activity, _ <: Activity, Float],
@@ -183,7 +178,6 @@ object DistriPerf {
           1
         }))
       Engine.default.sync(results)
-      // println("iteration: " + i)
     }
 
     val end = System.nanoTime()
@@ -198,37 +192,164 @@ object DistriPerf {
 
   def dnnPredict(model: Module[Float], input: MiniBatch[Float],
               params: DistriPerfParams): Unit = {
-    println("\nstart predict throughput test: ")
+    println("\nstart predict throughput test [Uni L2R 1 Layer]: ")
     var time : Long = 0
 
     val f = AlgKind.EltwiseTanh
     var direction = Direction.UnidirectionalLeft2Right
     val inputFormat = HeapData(Array(params.seqLength, params.batchSize,
       params.commonSize), Memory.Format.tnc)
+
     val lstm1 = LSTM(params.commonSize, params.commonSize, f, direction, layers = 1)
 
-    Engine.dnnComputing.invokeAndWait2(Array(0).map(_ => () => {
+    // Engine.dnnComputing.invokeAndWait2(Array(0).map(_ => () => {
       lstm1.setRuntime(new MklDnnRuntime)
       lstm1.initFwdPrimitives(Array(inputFormat), InferencePhase)
 
       for (i <- 1 to params.iteration) {
-        println("iteration: " + i)
+        // println("iteration: " + i)
         val start = System.nanoTime()
         lstm1.evaluate()
         val output = lstm1.forward(input.getInput())
         val end = System.nanoTime()
         time += (end - start)
-//        println("forward() time consumption: " + (end -start) + "\n\n")
-//        println("s/f portion: " + (end -start) + "\n\n")
       }
-    }))
+    // }))
 
+    logger.info("[Uni L2R 1 Layer] result: ")
     logger.info(s"Use java thread ${params.model} isNNRecurrent" +
       s" ${model.isInstanceOf[nn.Recurrent[Float]]} " +
       s"isMKLDNNLSTM ${model.isInstanceOf[LSTM]} engineType ${Engine.getEngineType()} " +
       s"batchSize ${params.batchSize} " + s"Average Throughput" +
       s"is ${params.batchSize.toDouble * params.iteration / (time) * 1e9} record / second."
     )
+    println("========================================================================\n\n")
+
+    time = 0
+
+    direction = Direction.BidirectionalConcat
+    val lstm2 = LSTM(params.commonSize, params.commonSize, f, direction, layers = 1)
+
+    lstm2.setRuntime(new MklDnnRuntime)
+    lstm2.initFwdPrimitives(Array(inputFormat), InferencePhase)
+
+    for (i <- 1 to params.iteration) {
+      val start = System.nanoTime()
+      lstm2.evaluate()
+      val output = lstm2.forward(input.getInput())
+      val end = System.nanoTime()
+      time += (end - start)
+    }
+
+    logger.info("[Bi Concat 1 Layer] result: ")
+    logger.info(s"Use java thread ${params.model} isNNRecurrent" +
+      s" ${model.isInstanceOf[nn.Recurrent[Float]]} " +
+      s"isMKLDNNLSTM ${model.isInstanceOf[LSTM]} engineType ${Engine.getEngineType()} " +
+      s"batchSize ${params.batchSize} " + s"Average Throughput" +
+      s"is ${params.batchSize.toDouble * params.iteration / (time) * 1e9} record / second."
+    )
+    println("========================================================================\n\n")
+
+    time = 0
+
+    direction = Direction.BidirectionalSum
+    val lstm3 = LSTM(params.commonSize, params.commonSize, f, direction, layers = 1)
+
+    lstm3.setRuntime(new MklDnnRuntime)
+    lstm3.initFwdPrimitives(Array(inputFormat), InferencePhase)
+
+    for (i <- 1 to params.iteration) {
+      // println("iteration: " + i)
+      val start = System.nanoTime()
+      lstm3.evaluate()
+      val output = lstm3.forward(input.getInput())
+      val end = System.nanoTime()
+      time += (end - start)
+    }
+
+    logger.info("[Bi Sum 1 Layer] result: ")
+    logger.info(s"Use java thread ${params.model} isNNRecurrent" +
+      s" ${model.isInstanceOf[nn.Recurrent[Float]]} " +
+      s"isMKLDNNLSTM ${model.isInstanceOf[LSTM]} engineType ${Engine.getEngineType()} " +
+      s"batchSize ${params.batchSize} " + s"Average Throughput" +
+      s"is ${params.batchSize.toDouble * params.iteration / (time) * 1e9} record / second."
+    )
+    println("========================================================================\n\n")
+
+    time = 0
+
+    direction = Direction.UnidirectionalLeft2Right
+    val lstm4 = LSTM(params.commonSize, params.commonSize, f, direction, layers = 5)
+
+    lstm4.setRuntime(new MklDnnRuntime)
+    lstm4.initFwdPrimitives(Array(inputFormat), InferencePhase)
+
+    for (i <- 1 to params.iteration) {
+      val start = System.nanoTime()
+      lstm4.evaluate()
+      val output = lstm4.forward(input.getInput())
+      val end = System.nanoTime()
+      time += (end - start)
+    }
+
+    logger.info("[Uni L2R 5 Layers] result: ")
+    logger.info(s"Use java thread ${params.model} isNNRecurrent" +
+      s" ${model.isInstanceOf[nn.Recurrent[Float]]} " +
+      s"isMKLDNNLSTM ${model.isInstanceOf[LSTM]} engineType ${Engine.getEngineType()} " +
+      s"batchSize ${params.batchSize} " + s"Average Throughput" +
+      s"is ${params.batchSize.toDouble * params.iteration / (time) * 1e9} record / second."
+    )
+    println("========================================================================\n\n")
+
+    time = 0
+
+    direction = Direction.BidirectionalConcat
+    val lstm5 = LSTM(params.commonSize, params.commonSize, f, direction, layers = 5)
+
+    lstm5.setRuntime(new MklDnnRuntime)
+    lstm5.initFwdPrimitives(Array(inputFormat), InferencePhase)
+
+    for (i <- 1 to params.iteration) {
+      val start = System.nanoTime()
+      lstm5.evaluate()
+      val output = lstm5.forward(input.getInput())
+      val end = System.nanoTime()
+      time += (end - start)
+    }
+
+    logger.info("[Bi Concat 5 Layers] result: ")
+    logger.info(s"Use java thread ${params.model} isNNRecurrent" +
+      s" ${model.isInstanceOf[nn.Recurrent[Float]]} " +
+      s"isMKLDNNLSTM ${model.isInstanceOf[LSTM]} engineType ${Engine.getEngineType()} " +
+      s"batchSize ${params.batchSize} " + s"Average Throughput" +
+      s"is ${params.batchSize.toDouble * params.iteration / (time) * 1e9} record / second."
+    )
+    println("========================================================================\n\n")
+
+    time = 0
+
+    direction = Direction.BidirectionalSum
+    val lstm6 = LSTM(params.commonSize, params.commonSize, f, direction, layers = 5)
+
+    lstm6.setRuntime(new MklDnnRuntime)
+    lstm6.initFwdPrimitives(Array(inputFormat), InferencePhase)
+
+    for (i <- 1 to params.iteration) {
+      val start = System.nanoTime()
+      lstm6.evaluate()
+      val output = lstm6.forward(input.getInput())
+      val end = System.nanoTime()
+      time += (end - start)
+    }
+
+    logger.info("[Bi Sum 5 Layers] result: ")
+    logger.info(s"Use java thread ${params.model} isNNRecurrent" +
+      s" ${model.isInstanceOf[nn.Recurrent[Float]]} " +
+      s"isMKLDNNLSTM ${model.isInstanceOf[LSTM]} engineType ${Engine.getEngineType()} " +
+      s"batchSize ${params.batchSize} " + s"Average Throughput" +
+      s"is ${params.batchSize.toDouble * params.iteration / (time) * 1e9} record / second."
+    )
+    println("========================================================================\n\n")
   }
 
   def threadPredict(params: DistriPerfParams, sc: SparkContext, modelLoad: Module[Float]): Unit = {
@@ -239,16 +360,13 @@ object DistriPerf {
     println("iterations = " + params.iteration)
     println("engineType = " + params.engineType)
 
-    if(params.engineType == "lstm_nn") {
-      require(modelLoad.isInstanceOf[nn.Recurrent[Float]])
-    }
+//    if(params.engineType == "lstm_nn") {
+//      require(modelLoad.isInstanceOf[nn.Recurrent[Float]])
+//    }
 
     if(params.engineType == "lstm_mkldnn") {
       require(modelLoad.isInstanceOf[LSTM])
     }
-
-    // println(modelLoad.isInstanceOf[nn.Recurrent[Float]])
-    // println(modelLoad.isInstanceOf[LSTM])
 
     var inputShape: Array[Int] = null
     var outputShape: Array[Int] = null
@@ -290,67 +408,87 @@ object DistriPerf {
       Engine.init
       Engine.setNodeAndCore(Engine.nodeNumber(), Engine.coreNumber())
 
-      /*
-      var initWeight = Tensor[Float](
-        Array(common_n_layers, 1,
-          params.commonSize, lstm_n_gates, params.commonSize)).rand(-1.0, 1.0)
-      var initWeightIter = Tensor[Float](
-        Array(common_n_layers, 1,
-          params.commonSize, lstm_n_gates, params.commonSize)).rand(-1.0, 1.0)
-      var initBias = Tensor[Float](
-        Array(common_n_layers, 1,
-          lstm_n_gates, params.commonSize)).rand(-1.0, 1.0)
-          */
-
       // NN LSTM
       if(params.engineType == "lstm_nn") {
         println("blas")
         Engine.setEngineType(MklBlas)
 
-        /*
-        initWeight = initWeight.resize(Array(inputSize, lstm_n_gates, hiddenSize))
-          .transpose(1, 2).transpose(2, 3)
-        initWeightIter = initWeightIter.resize(Array(hiddenSize, lstm_n_gates, hiddenSize))
-          .transpose(1, 2).transpose(2, 3)
-        initBias = initBias.resize(Array(lstm_n_gates, hiddenSize))
-        */
+        if(params.blasModelType == "unil2r1") {
+          val nn_model = nn.Recurrent[Float]().add(nn.LSTM(params.commonSize, params.commonSize))
+          threadPredict(params, sc, nn_model)
+          println("[Uni L2R 1 layer] result\n\n ")
+        }
 
-        /**
-          * MKLDNN Gate 1 -> nn/LSTM Gate 1
-          * MKLDNN Gate 2 -> nn/LSTM Gate 3
-          * MKLDNN Gate 3 -> nn/LSTM Gate 2
-          * MKLDNN Gate 4 -> nn/LSTM Gate 4
-          *
-          * uniParams(0) -> input weights
-          * uniParams(1) -> bias
-          * uniParams(2) -> hidden weights
-          */
+        if(params.blasModelType == "biconcat1") {
+          val nn_model2 = nn.BiRecurrent[Float](nn.JoinTable[Float](3, 0)
+            .asInstanceOf[AbstractModule[Table, Tensor[Float], Float]])
+            .add(nn.LSTM(params.commonSize, params.commonSize))
+          threadPredict(params, sc, nn_model2)
+          println("[Bi Concat 1 layer] result\n\n ")
+        }
 
-        /*
-        val concat = nn.JoinTable(1, 4)
-        initWeight = concat.forward(T(initWeight(1), initWeight(3),
-          initWeight(2), initWeight(4))).asInstanceOf[Tensor[Float]].clone()
-        initWeightIter = concat.forward(T(initWeightIter(1), initWeightIter(3),
-          initWeightIter(2), initWeightIter(4))).asInstanceOf[Tensor[Float]].clone()
-        initBias = concat.forward(T(initBias(1), initBias(3), initBias(2), initBias(4)))
-          .asInstanceOf[Tensor[Float]].clone()
-         */
+        if(params.blasModelType == "bisum1") {
+          val nn_model3 = nn.BiRecurrent[Float](nn.CAddTable()
+            .asInstanceOf[AbstractModule[Table, Tensor[Float], Float]])
+            .add(nn.LSTM(params.commonSize, params.commonSize))
+          threadPredict(params, sc, nn_model3)
+          println("[Bi Sum 1 layer] result\n\n ")
+        }
 
-        val nn_model = nn.Recurrent().add(nn.LSTM(params.commonSize, params.commonSize))
+        if(params.blasModelType == "unil2r5") {
+          val nn_input = nn.Input()
+          var nn_lstm = nn.Recurrent[Float]()
+            .add(nn.LSTM(params.commonSize, params.commonSize)).inputs(nn_input)
 
-        /*
-        val uniParams = nn_model.parameters()._1
-        initWeight = initWeight.resizeAs(uniParams(0))
-        initBias = initBias.resizeAs(uniParams(1))
-        initWeightIter = initWeightIter.resizeAs(uniParams(2))
+          for (i <- 1 until 5) {
+            nn_lstm = nn.Recurrent[Float]()
+              .add(nn.LSTM(params.commonSize, params.commonSize)).inputs(nn_lstm)
+          }
 
-        uniParams(0).copy(initWeight)
-        uniParams(1).copy(initBias)
-        uniParams(2).copy(initWeightIter)
-        */
+          val nn_model4 = nn.Graph(nn_input, nn_lstm)
+          threadPredict(params, sc, nn_model4)
+          println("[Uni L2R 5 layers] result\n\n ")
+        }
 
-        val modelLoad = nn_model
-        threadPredict(params, sc, modelLoad)
+        if(params.blasModelType == "bisuml5") {
+          val nn_model5 = nn.BiRecurrent[Float](nn.CAddTable()
+            .asInstanceOf[AbstractModule[Table, Tensor[Float], Float]])
+
+          val lstm1_1 = nn.Recurrent().add(nn.LSTM(params.commonSize, params.commonSize))
+          val lstm1_2 = nn.Recurrent().add(nn.LSTM(params.commonSize, params.commonSize))
+          val lstm1_3 = nn.Recurrent().add(nn.LSTM(params.commonSize, params.commonSize))
+          val lstm1_4 = nn.Recurrent().add(nn.LSTM(params.commonSize, params.commonSize))
+          val lstm1_5 = nn.Recurrent().add(nn.LSTM(params.commonSize, params.commonSize))
+
+          val lstm2_1 = nn.Recurrent().add(nn.LSTM(params.commonSize, params.commonSize))
+          val lstm2_2 = nn.Recurrent().add(nn.LSTM(params.commonSize, params.commonSize))
+          val lstm2_3 = nn.Recurrent().add(nn.LSTM(params.commonSize, params.commonSize))
+          val lstm2_4 = nn.Recurrent().add(nn.LSTM(params.commonSize, params.commonSize))
+          val lstm2_5 = nn.Recurrent().add(nn.LSTM(params.commonSize, params.commonSize))
+
+          val dir1 = nn.Sequential()
+          dir1
+            .add(lstm1_1)
+            .add(lstm1_2)
+            .add(lstm1_3)
+            .add(lstm1_4)
+            .add(lstm1_5)
+
+          val dir2 = nn.Sequential()
+          dir2
+            .add(lstm2_1)
+            .add(lstm2_2)
+            .add(lstm2_3)
+            .add(lstm2_4)
+            .add(lstm2_5)
+
+          nn_model5.layer = dir1
+          nn_model5.revLayer = dir2
+          nn_model5.init()
+
+          threadPredict(params, sc, nn_model5)
+          println("[Bi Sum 5 layers] result\n\n ")
+        }
       }
 
       // MKLDNN LSTM
@@ -363,11 +501,6 @@ object DistriPerf {
 
         val inputFormat = HeapData(Array(params.seqLength, params.batchSize,
           params.commonSize), Memory.Format.tnc)
-
-        /*
-        val lstm1 = LSTM(params.commonSize, params.commonSize, f, direction,
-          initWeight = initWeight, initWeightIter = initWeightIter, initBias = initBias)
-          */
 
         val lstm1 = LSTM(params.commonSize, params.commonSize, f, direction, layers = 1)
 
@@ -386,6 +519,7 @@ case class DistriPerfParams (
     threadNum: String = "1",
     engineType: String = "lstm_mkldnn",
     model: String = "vanilla_lstm",
+    blasModelType: String = "unil2r",
     threadPredict: Boolean = true
   )
 

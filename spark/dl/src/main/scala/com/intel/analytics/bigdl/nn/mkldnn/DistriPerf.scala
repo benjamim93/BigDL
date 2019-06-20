@@ -282,14 +282,16 @@ object DistriPerf {
     }
 
     logger.info("[Uni L2R 1 Layer] result: ")
+    logger.info(s"Forward time: ${time_forward}")
+    logger.info(s"Backward time: ${time_backward}")
     logger.info(s"Use java thread ${params.model} isNNRecurrent" +
       s" ${model.isInstanceOf[nn.Recurrent[Float]]} " +
       s"isMKLDNNLSTM ${model.isInstanceOf[RNN]} engineType ${Engine.getEngineType()} " +
       s"batchSize ${params.batchSize} ")
-    logger.info(s"Average Throughput" +
+    logger.info(s"Average Throughput " +
       s"is ${params.batchSize.toDouble * params.iteration / (time_forward) * 1e9}" +
       s" record / second (forward).")
-    logger.info(s"Average Throughput" +
+    logger.info(s"Average Throughput " +
       s"is ${params.batchSize.toDouble * params.iteration / (time_backward) * 1e9}" +
       s" record / second (backward).")
     println("========================================================================\n\n")
@@ -325,6 +327,8 @@ object DistriPerf {
     }
 
     logger.info("[Bi Concat 1 Layer] result: ")
+    logger.info(s"Forward time: ${time_forward}")
+    logger.info(s"Backward time: ${time_backward}")
     logger.info(s"Use java thread ${params.model} isNNRecurrent" +
       s" ${model.isInstanceOf[nn.Recurrent[Float]]} " +
       s"isMKLDNNLSTM ${model.isInstanceOf[RNN]} engineType ${Engine.getEngineType()} " +
@@ -368,6 +372,8 @@ object DistriPerf {
     }
 
     logger.info("[Bi Sum 1 Layer] result: ")
+    logger.info(s"Forward time: ${time_forward}")
+    logger.info(s"Backward time: ${time_backward}")
     logger.info(s"Use java thread ${params.model} isNNRecurrent" +
       s" ${model.isInstanceOf[nn.Recurrent[Float]]} " +
       s"isMKLDNNLSTM ${model.isInstanceOf[RNN]} engineType ${Engine.getEngineType()} " +
@@ -411,6 +417,8 @@ object DistriPerf {
     }
 
     logger.info("[Uni L2R 5 Layers] result: ")
+    logger.info(s"Forward time: ${time_forward}")
+    logger.info(s"Backward time: ${time_backward}")
     logger.info(s"Use java thread ${params.model} isNNRecurrent" +
       s" ${model.isInstanceOf[nn.Recurrent[Float]]} " +
       s"isMKLDNNLSTM ${model.isInstanceOf[RNN]} engineType ${Engine.getEngineType()} " +

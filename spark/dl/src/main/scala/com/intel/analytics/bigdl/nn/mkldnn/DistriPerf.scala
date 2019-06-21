@@ -28,6 +28,7 @@ import com.intel.analytics.bigdl.mkl.{AlgKind, Direction, Memory}
 import com.intel.analytics.bigdl.models.inception.Inception_v1_NoAuxClassifier
 import com.intel.analytics.bigdl.models.lenet.LeNet5
 import com.intel.analytics.bigdl.nn
+import com.intel.analytics.bigdl.nn.mkldnn.DistriPerf_inf.logger
 import com.intel.analytics.bigdl.nn.mkldnn.Phase.TrainingPhase
 // import com.intel.analytics.bigdl.models.resnet.ResNet
 import com.intel.analytics.bigdl.models.resnet.ResNet.{DatasetType, ShortcutType}
@@ -121,14 +122,14 @@ object DistriPerf {
       case MklBlas => Engine.coreNumber()
       case MklDnn => 1
     }
-    model.evaluate()
+    // model.evaluate()
     val workingModels = if (subModelNumber != 1) {
       val wb = Util.getAndClearWeightBias(model.parameters())
       val models = (1 to subModelNumber).map(i => {
         logger.info(s"Clone $i model...")
         val m = model.cloneModule()
         Util.putWeightBias(wb, m)
-        m.evaluate()
+        // m.evaluate()
         m
       }).toArray
       Util.putWeightBias(wb, model)
@@ -150,6 +151,16 @@ object DistriPerf {
       b += 1
     }
 
+    val gradOutputShape =
+      if (params.blasModelType == "unil2r1"
+        || params.blasModelType == "unil2r5"
+        || params.blasModelType == "bisum1") {
+        Array(params.batchSize, params.seqLength, params.commonSize)
+      }
+      else {
+        Array( params.batchSize, params.seqLength, 2 * params.commonSize)
+      }
+
     // warm up
     println(s"engine default pool size ${Engine.default.getPoolSize}")
     val warmup = 20
@@ -158,65 +169,39 @@ object DistriPerf {
         // val localModel = workingModels(i).evaluate()
         val localModel = workingModels(i)
         val data = inputBuffer(i)
+        val datainput = data.getInput()
+
+        val gradOutput = Tensor(
+          Array(datainput.toTensor.size(1), gradOutputShape(1), gradOutputShape(2)))
+          .rand(1.0, 1.0)
+
         for (i <- 0 to warmup) {
-          val output = localModel.forward(data.getInput())
-
-          val gradOutputShape =
-            if (params.blasModelType == "unil2r1"
-              || params.blasModelType == "unil2r5"
-              || params.blasModelType == "bisum1") {
-              Array(params.batchSize, params.seqLength, params.commonSize)
-            }
-            else {
-              Array( params.batchSize, params.seqLength, 2 * params.commonSize)
-            }
-
-          val datainput = data.getInput()
-
-          val gradinput = localModel.backward(
-            data.getInput(),
-            Tensor(Array(datainput.toTensor.size(1), gradOutputShape(1), gradOutputShape(2)))
-              .rand(1.0, 1.0))
+          val output = localModel.forward(datainput)
+          val gradinput = localModel.backward(datainput, gradOutput)
         }
         1
       }))
     Engine.default.sync(warmpResults)
     println("start predict throughput test")
 
-    var time_forward : Long = 0
-    var time_backward : Long = 0
-
+    val start = System.nanoTime()
     for (i <- 0 to params.iteration) {
       val results = Engine.default.invoke((0 until subModelNumber).map(i =>
         () => {
           // val localModel = workingModels(i).evaluate()
           val localModel = workingModels(i)
           val data = inputBuffer(i)
-
-          var start = System.nanoTime()
-          val output = localModel.forward(data.getInput())
-          var end = System.nanoTime()
-          time_forward += (end - start)
-
-          val gradOutputShape =
-            if (params.blasModelType == "unil2r1"
-              || params.blasModelType == "unil2r5"
-              || params.blasModelType == "bisum1") {
-              Array(params.batchSize, params.seqLength, params.commonSize)
-            }
-            else {
-              Array(params.batchSize, params.seqLength, 2 * params.commonSize)
-            }
-
           val datainput = data.getInput()
 
-          start = System.nanoTime()
-          val gradinput = localModel.backward(
-            data.getInput(),
-            Tensor(Array(datainput.toTensor.size(1), gradOutputShape(1), gradOutputShape(2)))
-              .rand(1.0, 1.0))
-          end = System.nanoTime()
-          time_backward += (end - start)
+          val gradOutput = Tensor(
+            Array(datainput.toTensor.size(1), gradOutputShape(1), gradOutputShape(2)))
+            .rand(1.0, 1.0)
+
+          val output = localModel.forward(datainput)
+          val gradinput = localModel.backward(datainput, gradOutput)
+
+          // time += (end - start)
+
           //          val e1 = System.nanoTime() - s1
           //          getTopTimes(localModel.getTimes(), e1)
           //          println(s"iteration time ${e1/1e9}")
@@ -225,38 +210,32 @@ object DistriPerf {
         }))
       Engine.default.sync(results)
     }
-
     val end = System.nanoTime()
 
     logger.info(s"Use java thread ${params.model} isNNRecurrent" +
       s" ${model.isInstanceOf[nn.Recurrent[Float]]} " +
       s"isMKLDNNLSTM ${model.isInstanceOf[RNN]} engineType ${Engine.getEngineType()} " +
       s"batchSize ${params.batchSize} " + s"Average Throughput" +
-      s"is ${params.batchSize.toDouble * params.iteration / (time_forward) * 1e9} record / second" +
-      s"(forward)."
-    )
-
-    logger.info(s"Use java thread ${params.model} isNNRecurrent" +
-      s" ${model.isInstanceOf[nn.Recurrent[Float]]} " +
-      s"isMKLDNNLSTM ${model.isInstanceOf[RNN]} engineType ${Engine.getEngineType()} " +
-      s"batchSize ${params.batchSize} " + s"Average Throughput" +
-      s"is ${params.batchSize.toDouble * params.iteration / (time_backward) * 1e9} record / second" +
-      s"(backward)."
+      s"is ${params.batchSize.toDouble * params.iteration / (end - start) * 1e9} " +
+      s"record / second."
     )
   }
 
   def dnnPredict(model: Module[Float], input: MiniBatch[Float],
                  params: DistriPerfParams): Unit = {
     println("\nstart predict throughput test [Uni L2R 1 Layer]: ")
-    var time_forward : Long = 0
-    var time_backward : Long = 0
-
     val f = AlgKind.EltwiseTanh
     var direction = Direction.UnidirectionalLeft2Right
+
     val inputFormat = HeapData(Array(params.seqLength, params.batchSize,
       params.commonSize), Memory.Format.tnc)
+    val input_t = input.getInput()
+
     var gradOutputFormat = HeapData(Array(params.seqLength, params.batchSize,
       params.commonSize), Memory.Format.tnc)
+    var gradOutput_t = Tensor(gradOutputFormat.shape).rand(1.0, 1.0)
+
+    println("========================================================================\n\n")
 
     val lstm1 = RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize,
       f, direction, layers = 1)
@@ -265,42 +244,51 @@ object DistriPerf {
     lstm1.initFwdPrimitives(Array(inputFormat), TrainingPhase)
     lstm1.initBwdPrimitives(Array(gradOutputFormat), TrainingPhase)
 
+    val start1 = System.nanoTime()
     for (i <- 1 to params.iteration) {
-      // println("iteration: " + i)
-      var start = System.nanoTime()
-      val output = lstm1.forward(input.getInput())
-      var end = System.nanoTime()
-      time_forward += (end - start)
-
-      start = System.nanoTime()
-      val gradInput = lstm1.backward(
-        input.getInput(),
-        Tensor(gradOutputFormat.shape)
-          .rand(1.0, 1.0))
-      end = System.nanoTime()
-      time_backward += (end - start)
+      val output = lstm1.forward(input_t)
+      val gradInput = lstm1.backward(input_t, gradOutput_t)
     }
+    val end1 = System.nanoTime()
 
     logger.info("[Uni L2R 1 Layer] result: ")
-    logger.info(s"Forward time: ${time_forward}")
-    logger.info(s"Backward time: ${time_backward}")
-    logger.info(s"Use java thread ${params.model} isNNRecurrent" +
-      s" ${model.isInstanceOf[nn.Recurrent[Float]]} " +
+    logger.info(s"Use java thread ${params.model} isNNRecurrent " +
+      s"${model.isInstanceOf[nn.Recurrent[Float]]} " +
       s"isMKLDNNLSTM ${model.isInstanceOf[RNN]} engineType ${Engine.getEngineType()} " +
       s"batchSize ${params.batchSize} ")
-    logger.info(s"Average Throughput " +
-      s"is ${params.batchSize.toDouble * params.iteration / (time_forward) * 1e9}" +
-      s" record / second (forward).")
-    logger.info(s"Average Throughput " +
-      s"is ${params.batchSize.toDouble * params.iteration / (time_backward) * 1e9}" +
-      s" record / second (backward).")
+    logger.info(s"Average Throughput is: " +
+      s"${params.batchSize.toDouble * params.iteration / (end1 - start1) * 1e9} " +
+      s"record / second.")
+
     println("========================================================================\n\n")
 
-    time_forward = 0
-    time_backward = 0
+    val lstm1_inf = RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize,
+      f, direction, layers = 1)
+
+    lstm1_inf.evaluate()
+    lstm1_inf.setRuntime(new MklDnnRuntime)
+    lstm1_inf.initFwdPrimitives(Array(inputFormat), InferencePhase)
+
+    val start1_inf = System.nanoTime()
+    for (i <- 1 to params.iteration) {
+      val output = lstm1_inf.forward(input_t)
+    }
+    val end1_inf = System.nanoTime()
+
+    logger.info("[Uni L2R 1 Layer] result: ")
+    logger.info(s"Use java thread ${params.model} isNNRecurrent " +
+      s"${model.isInstanceOf[nn.Recurrent[Float]]} " +
+      s"isMKLDNNLSTM ${model.isInstanceOf[RNN]} engineType ${Engine.getEngineType()} " +
+      s"batchSize ${params.batchSize} ")
+    logger.info(s"Average Throughput is: " +
+      s"${params.batchSize.toDouble * params.iteration / (end1_inf - start1_inf) * 1e9} " +
+      s"record / second.")
+
+    println("========================================================================\n\n")
 
     gradOutputFormat = HeapData(Array(params.seqLength, params.batchSize,
       2 * params.commonSize), Memory.Format.tnc)
+    gradOutput_t = Tensor(gradOutputFormat.shape).rand(1.0, 1.0)
 
     direction = Direction.BidirectionalConcat
     val lstm2 = RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize,
@@ -310,42 +298,56 @@ object DistriPerf {
     lstm2.initFwdPrimitives(Array(inputFormat), TrainingPhase)
     lstm2.initBwdPrimitives(Array(gradOutputFormat), TrainingPhase)
 
+    val start2 = System.nanoTime()
     for (i <- 1 to params.iteration) {
-      // println("iteration: " + i)
-      var start = System.nanoTime()
-      val output = lstm2.forward(input.getInput())
-      var end = System.nanoTime()
-      time_forward += (end - start)
-
-      start = System.nanoTime()
-      val gradInput = lstm2.backward(
-        input.getInput(),
-        Tensor(gradOutputFormat.shape)
-          .rand(1.0, 1.0))
-      end = System.nanoTime()
-      time_backward += (end - start)
+      val output = lstm2.forward(input_t)
+      val gradInput = lstm2.backward(input_t, gradOutput_t)
     }
+    val end2 = System.nanoTime()
 
     logger.info("[Bi Concat 1 Layer] result: ")
-    logger.info(s"Forward time: ${time_forward}")
-    logger.info(s"Backward time: ${time_backward}")
-    logger.info(s"Use java thread ${params.model} isNNRecurrent" +
-      s" ${model.isInstanceOf[nn.Recurrent[Float]]} " +
+    logger.info(s"Use java thread ${params.model} isNNRecurrent " +
+      s"${model.isInstanceOf[nn.Recurrent[Float]]} " +
       s"isMKLDNNLSTM ${model.isInstanceOf[RNN]} engineType ${Engine.getEngineType()} " +
       s"batchSize ${params.batchSize} ")
-    logger.info(s"Average Throughput" +
-      s"is ${params.batchSize.toDouble * params.iteration / (time_forward) * 1e9}" +
-      s" record / second (forward).")
-    logger.info(s"Average Throughput" +
-      s"is ${params.batchSize.toDouble * params.iteration / (time_backward) * 1e9}" +
-      s" record / second (backward).")
+    logger.info(s"Average Throughput is: " +
+      s"${params.batchSize.toDouble * params.iteration / (end2 - start2) * 1e9} " +
+      s"record / second.")
+
     println("========================================================================\n\n")
 
-    time_forward = 0
-    time_backward = 0
+    gradOutputFormat = HeapData(Array(params.seqLength, params.batchSize,
+      2 * params.commonSize), Memory.Format.tnc)
+    gradOutput_t = Tensor(gradOutputFormat.shape).rand(1.0, 1.0)
+
+    direction = Direction.BidirectionalConcat
+    val lstm2_inf = RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize,
+      f, direction, layers = 1)
+
+    lstm2_inf.evaluate()
+    lstm2_inf.setRuntime(new MklDnnRuntime)
+    lstm2_inf.initFwdPrimitives(Array(inputFormat), InferencePhase)
+
+    val start2_inf = System.nanoTime()
+    for (i <- 1 to params.iteration) {
+      val output = lstm2_inf.forward(input_t)
+    }
+    val end2_inf = System.nanoTime()
+
+    logger.info("[Bi Concat 1 Layer] result: ")
+    logger.info(s"Use java thread ${params.model} isNNRecurrent " +
+      s"${model.isInstanceOf[nn.Recurrent[Float]]} " +
+      s"isMKLDNNLSTM ${model.isInstanceOf[RNN]} engineType ${Engine.getEngineType()} " +
+      s"batchSize ${params.batchSize} ")
+    logger.info(s"Average Throughput is: " +
+      s"${params.batchSize.toDouble * params.iteration / (end2_inf - start2_inf) * 1e9} " +
+      s"record / second.")
+
+    println("========================================================================\n\n")
 
     gradOutputFormat = HeapData(Array(params.seqLength, params.batchSize,
-      params.commonSize), Memory.Format.tnc)
+      2 * params.commonSize), Memory.Format.tnc)
+    gradOutput_t = Tensor(gradOutputFormat.shape).rand(1.0, 1.0)
 
     direction = Direction.BidirectionalSum
     val lstm3 = RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize,
@@ -355,80 +357,110 @@ object DistriPerf {
     lstm3.initFwdPrimitives(Array(inputFormat), TrainingPhase)
     lstm3.initBwdPrimitives(Array(gradOutputFormat), TrainingPhase)
 
+    val start3 = System.nanoTime()
     for (i <- 1 to params.iteration) {
-      // println("iteration: " + i)
-      var start = System.nanoTime()
-      val output = lstm3.forward(input.getInput())
-      var end = System.nanoTime()
-      time_forward += (end - start)
-
-      start = System.nanoTime()
-      val gradInput = lstm3.backward(
-        input.getInput(),
-        Tensor(gradOutputFormat.shape)
-          .rand(1.0, 1.0))
-      end = System.nanoTime()
-      time_backward += (end - start)
+      val output = lstm3.forward(input_t)
+      val gradInput = lstm3.backward(input_t, gradOutput_t)
     }
+    val end3 = System.nanoTime()
 
     logger.info("[Bi Sum 1 Layer] result: ")
-    logger.info(s"Forward time: ${time_forward}")
-    logger.info(s"Backward time: ${time_backward}")
-    logger.info(s"Use java thread ${params.model} isNNRecurrent" +
-      s" ${model.isInstanceOf[nn.Recurrent[Float]]} " +
+    logger.info(s"Use java thread ${params.model} isNNRecurrent " +
+      s"${model.isInstanceOf[nn.Recurrent[Float]]} " +
       s"isMKLDNNLSTM ${model.isInstanceOf[RNN]} engineType ${Engine.getEngineType()} " +
       s"batchSize ${params.batchSize} ")
-    logger.info(s"Average Throughput" +
-      s"is ${params.batchSize.toDouble * params.iteration / (time_forward) * 1e9}" +
-      s" record / second (forward).")
-    logger.info(s"Average Throughput" +
-      s"is ${params.batchSize.toDouble * params.iteration / (time_backward) * 1e9}" +
-      s" record / second (backward).")
+    logger.info(s"Average Throughput is: " +
+      s"${params.batchSize.toDouble * params.iteration / (end3 - start3) * 1e9} " +
+      s"record / second.")
+
     println("========================================================================\n\n")
 
-    time_forward = 0
-    time_backward = 0
+    gradOutputFormat = HeapData(Array(params.seqLength, params.batchSize,
+      2 * params.commonSize), Memory.Format.tnc)
+    gradOutput_t = Tensor(gradOutputFormat.shape).rand(1.0, 1.0)
+
+    direction = Direction.BidirectionalSum
+    val lstm3_inf = RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize,
+      f, direction, layers = 1)
+
+    lstm3_inf.evaluate()
+    lstm3_inf.setRuntime(new MklDnnRuntime)
+    lstm3_inf.initFwdPrimitives(Array(inputFormat), TrainingPhase)
+
+    val start3_inf = System.nanoTime()
+    for (i <- 1 to params.iteration) {
+      val output = lstm3_inf.forward(input_t)
+    }
+    val end3_inf = System.nanoTime()
+
+    logger.info("[Bi Sum 1 Layer] result: ")
+    logger.info(s"Use java thread ${params.model} isNNRecurrent " +
+      s"${model.isInstanceOf[nn.Recurrent[Float]]} " +
+      s"isMKLDNNLSTM ${model.isInstanceOf[RNN]} engineType ${Engine.getEngineType()} " +
+      s"batchSize ${params.batchSize} ")
+    logger.info(s"Average Throughput is: " +
+      s"${params.batchSize.toDouble * params.iteration / (end3_inf - start3_inf) * 1e9} " +
+      s"record / second.")
+
+    println("========================================================================\n\n")
 
     gradOutputFormat = HeapData(Array(params.seqLength, params.batchSize,
       params.commonSize), Memory.Format.tnc)
+    gradOutput_t = Tensor(gradOutputFormat.shape).rand(1.0, 1.0)
 
     direction = Direction.UnidirectionalLeft2Right
     val lstm4 = RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize,
       f, direction, layers = 5)
 
     lstm4.setRuntime(new MklDnnRuntime)
-    lstm4.initFwdPrimitives(Array(inputFormat), InferencePhase)
+    lstm4.initFwdPrimitives(Array(inputFormat), TrainingPhase)
     lstm4.initBwdPrimitives(Array(gradOutputFormat), TrainingPhase)
 
+    val start4 = System.nanoTime()
     for (i <- 1 to params.iteration) {
-      // println("iteration: " + i)
-      var start = System.nanoTime()
-      val output = lstm4.forward(input.getInput())
-      var end = System.nanoTime()
-      time_forward += (end - start)
-
-      start = System.nanoTime()
-      val gradInput = lstm4.backward(
-        input.getInput(),
-        Tensor(gradOutputFormat.shape)
-          .rand(1.0, 1.0))
-      end = System.nanoTime()
-      time_backward += (end - start)
+      val output = lstm4.forward(input_t)
+      val gradInput = lstm4.backward(input_t, gradOutput_t)
     }
+    val end4 = System.nanoTime()
 
     logger.info("[Uni L2R 5 Layers] result: ")
-    logger.info(s"Forward time: ${time_forward}")
-    logger.info(s"Backward time: ${time_backward}")
     logger.info(s"Use java thread ${params.model} isNNRecurrent" +
-      s" ${model.isInstanceOf[nn.Recurrent[Float]]} " +
+      s"${model.isInstanceOf[nn.Recurrent[Float]]} " +
       s"isMKLDNNLSTM ${model.isInstanceOf[RNN]} engineType ${Engine.getEngineType()} " +
       s"batchSize ${params.batchSize} ")
-    logger.info(s"Average Throughput" +
-      s"is ${params.batchSize.toDouble * params.iteration / (time_forward) * 1e9}" +
-      s" record / second (forward).")
-    logger.info(s"Average Throughput" +
-      s"is ${params.batchSize.toDouble * params.iteration / (time_backward) * 1e9}" +
-      s" record / second (backward).")
+    logger.info(s"Average Throughput is: " +
+      s"${params.batchSize.toDouble * params.iteration / (end4 - start4) * 1e9}" +
+      s"record / second.")
+
+    println("========================================================================\n\n")
+
+    gradOutputFormat = HeapData(Array(params.seqLength, params.batchSize,
+      params.commonSize), Memory.Format.tnc)
+    gradOutput_t = Tensor(gradOutputFormat.shape).rand(1.0, 1.0)
+
+    direction = Direction.UnidirectionalLeft2Right
+    val lstm4_inf = RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize,
+      f, direction, layers = 5)
+
+    lstm4_inf.evaluate()
+    lstm4_inf.setRuntime(new MklDnnRuntime)
+    lstm4_inf.initFwdPrimitives(Array(inputFormat), TrainingPhase)
+
+    val start4_inf = System.nanoTime()
+    for (i <- 1 to params.iteration) {
+      val output = lstm4_inf.forward(input_t)
+    }
+    val end4_inf = System.nanoTime()
+
+    logger.info("[Uni L2R 5 Layers] result: ")
+    logger.info(s"Use java thread ${params.model} isNNRecurrent" +
+      s"${model.isInstanceOf[nn.Recurrent[Float]]} " +
+      s"isMKLDNNLSTM ${model.isInstanceOf[RNN]} engineType ${Engine.getEngineType()} " +
+      s"batchSize ${params.batchSize} ")
+    logger.info(s"Average Throughput is: " +
+      s"${params.batchSize.toDouble * params.iteration / (end4_inf - start4_inf) * 1e9}" +
+      s"record / second.")
+
     println("========================================================================\n\n")
 
     /*

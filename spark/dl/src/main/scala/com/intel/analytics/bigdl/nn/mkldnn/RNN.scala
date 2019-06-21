@@ -306,6 +306,7 @@ class RNN(
   }
 
   override private[mkldnn] def initFwdPrimitives(inputs: Array[MemoryData], phase: Phase) = {
+    println("isTraining : " + isTraining())
     val kind = if (!isTraining()) {
       PropKind.ForwardInference
     } else {

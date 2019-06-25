@@ -398,4 +398,34 @@ class ReorderMemorySpec extends FlatSpec with Matchers with BeforeAndAfter {
       reorder.forward(from)
     })
   }
+
+  "Reorder from tnc to ntc" should "be correct" in {
+    println("here")
+    val shapeNTC = Array(3, 2, 4)
+    val shapeTNC = Array(2, 3, 4)
+    val inputFormats = HeapData(shapeNTC, Memory.Format.ntc)
+    val outputFormats = HeapData(shapeTNC, Memory.Format.tnc)
+    val gradInputFormats = HeapData(shapeTNC, Memory.Format.tnc)
+    val gradOutputFormats = HeapData(shapeNTC, Memory.Format.ntc)
+
+    val layer = ReorderMemory(inputFormat = inputFormats, outputFormat = outputFormats,
+      gradInputFormat = gradInputFormats, gradOutputFomat = gradOutputFormats)
+
+    layer.setRuntime(new MklDnnRuntime())
+    layer.initFwdPrimitives(Array(inputFormats), Phase.TrainingPhase)
+    layer.initBwdPrimitives(Array(gradOutputFormats), Phase.TrainingPhase)
+
+    val input = Tensor[Float](3, 2, 4).rand()
+    val gradOutput = input.clone()
+    val output = layer.forward(input).toTensor[Float]
+    val grad = layer.backward(input, gradOutput).toTensor[Float]
+
+    val inputTNC = input.transpose(1, 2).contiguous().clone()
+
+    inputTNC should be(output)
+    inputTNC should be(grad)
+    println("inputTNC: " + inputTNC)
+    println("output: " + output)
+    println("grad: " + grad)
+  }
 }

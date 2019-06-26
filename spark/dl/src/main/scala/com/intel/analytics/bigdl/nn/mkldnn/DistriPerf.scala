@@ -24,7 +24,8 @@ import breeze.numerics._
 import com.intel.analytics.bigdl.{Module, utils}
 import com.intel.analytics.bigdl.dataset.{LocalDataSet, MiniBatch, Sample, SampleToMiniBatch}
 import com.intel.analytics.bigdl.example.loadmodel.AlexNet
-import com.intel.analytics.bigdl.mkl.{AlgKind, Direction, Memory}
+import com.intel.analytics.bigdl.mkl.hardware.Affinity
+import com.intel.analytics.bigdl.mkl.{AlgKind, Direction, MKL, Memory}
 import com.intel.analytics.bigdl.models.inception.Inception_v1_NoAuxClassifier
 import com.intel.analytics.bigdl.models.lenet.LeNet5
 import com.intel.analytics.bigdl.nn
@@ -240,15 +241,16 @@ object DistriPerf {
     val lstm1 = RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize,
       f, direction, layers = 1)
 
-    lstm1.setRuntime(new MklDnnRuntime)
-    lstm1.initFwdPrimitives(Array(inputFormat), TrainingPhase)
-    lstm1.initBwdPrimitives(Array(gradOutputFormat), TrainingPhase)
-
     val start1 = System.nanoTime()
-    for (i <- 1 to params.iteration) {
-      val output = lstm1.forward(input_t)
-      val gradInput = lstm1.backward(input_t, gradOutput_t)
-    }
+    Engine.dnnComputing.invokeAndWait2((0 until 1).map(i => () => {
+      lstm1.setRuntime(new MklDnnRuntime)
+      lstm1.initFwdPrimitives(Array(inputFormat), TrainingPhase)
+      lstm1.initBwdPrimitives(Array(gradOutputFormat), TrainingPhase)
+      for (i <- 1 to params.iteration) {
+        val output = lstm1.forward(input_t)
+        val gradInput = lstm1.backward(input_t, gradOutput_t)
+      }
+    }))
     val end1 = System.nanoTime()
 
     logger.info("[Uni L2R 1 Layer] result: ")
@@ -265,14 +267,15 @@ object DistriPerf {
     val lstm1_inf = RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize,
       f, direction, layers = 1)
 
-    lstm1_inf.evaluate()
-    lstm1_inf.setRuntime(new MklDnnRuntime)
-    lstm1_inf.initFwdPrimitives(Array(inputFormat), InferencePhase)
-
     val start1_inf = System.nanoTime()
-    for (i <- 1 to params.iteration) {
-      val output = lstm1_inf.forward(input_t)
-    }
+    Engine.dnnComputing.invokeAndWait2((0 until 1).map(i => () => {
+      lstm1_inf.evaluate()
+      lstm1_inf.setRuntime(new MklDnnRuntime)
+      lstm1_inf.initFwdPrimitives(Array(inputFormat), InferencePhase)
+      for (i <- 1 to params.iteration) {
+        val output = lstm1_inf.forward(input_t)
+      }
+    }))
     val end1_inf = System.nanoTime()
 
     logger.info("[Uni L2R 1 Layer] result: ")
@@ -294,15 +297,16 @@ object DistriPerf {
     val lstm2 = RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize,
       f, direction, layers = 1)
 
-    lstm2.setRuntime(new MklDnnRuntime)
-    lstm2.initFwdPrimitives(Array(inputFormat), TrainingPhase)
-    lstm2.initBwdPrimitives(Array(gradOutputFormat), TrainingPhase)
-
     val start2 = System.nanoTime()
-    for (i <- 1 to params.iteration) {
-      val output = lstm2.forward(input_t)
-      val gradInput = lstm2.backward(input_t, gradOutput_t)
-    }
+    Engine.dnnComputing.invokeAndWait2((0 until 1).map(i => () => {
+      lstm2.setRuntime(new MklDnnRuntime)
+      lstm2.initFwdPrimitives(Array(inputFormat), TrainingPhase)
+      lstm2.initBwdPrimitives(Array(gradOutputFormat), TrainingPhase)
+      for (i <- 1 to params.iteration) {
+        val output = lstm2.forward(input_t)
+        val gradInput = lstm2.backward(input_t, gradOutput_t)
+      }
+    }))
     val end2 = System.nanoTime()
 
     logger.info("[Bi Concat 1 Layer] result: ")
@@ -324,14 +328,15 @@ object DistriPerf {
     val lstm2_inf = RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize,
       f, direction, layers = 1)
 
-    lstm2_inf.evaluate()
-    lstm2_inf.setRuntime(new MklDnnRuntime)
-    lstm2_inf.initFwdPrimitives(Array(inputFormat), InferencePhase)
-
     val start2_inf = System.nanoTime()
-    for (i <- 1 to params.iteration) {
-      val output = lstm2_inf.forward(input_t)
-    }
+    Engine.dnnComputing.invokeAndWait2((0 until 1).map(i => () => {
+      lstm2_inf.evaluate()
+      lstm2_inf.setRuntime(new MklDnnRuntime)
+      lstm2_inf.initFwdPrimitives(Array(inputFormat), InferencePhase)
+      for (i <- 1 to params.iteration) {
+        val output = lstm2_inf.forward(input_t)
+      }
+    }))
     val end2_inf = System.nanoTime()
 
     logger.info("[Bi Concat 1 Layer] result: ")
@@ -353,15 +358,16 @@ object DistriPerf {
     val lstm3 = RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize,
       f, direction, layers = 1)
 
-    lstm3.setRuntime(new MklDnnRuntime)
-    lstm3.initFwdPrimitives(Array(inputFormat), TrainingPhase)
-    lstm3.initBwdPrimitives(Array(gradOutputFormat), TrainingPhase)
-
     val start3 = System.nanoTime()
-    for (i <- 1 to params.iteration) {
-      val output = lstm3.forward(input_t)
-      val gradInput = lstm3.backward(input_t, gradOutput_t)
-    }
+    Engine.dnnComputing.invokeAndWait2((0 until 1).map(i => () => {
+      lstm3.setRuntime(new MklDnnRuntime)
+      lstm3.initFwdPrimitives(Array(inputFormat), TrainingPhase)
+      lstm3.initBwdPrimitives(Array(gradOutputFormat), TrainingPhase)
+      for (i <- 1 to params.iteration) {
+        val output = lstm3.forward(input_t)
+        val gradInput = lstm3.backward(input_t, gradOutput_t)
+      }
+    }))
     val end3 = System.nanoTime()
 
     logger.info("[Bi Sum 1 Layer] result: ")
@@ -383,14 +389,15 @@ object DistriPerf {
     val lstm3_inf = RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize,
       f, direction, layers = 1)
 
-    lstm3_inf.evaluate()
-    lstm3_inf.setRuntime(new MklDnnRuntime)
-    lstm3_inf.initFwdPrimitives(Array(inputFormat), TrainingPhase)
-
     val start3_inf = System.nanoTime()
-    for (i <- 1 to params.iteration) {
-      val output = lstm3_inf.forward(input_t)
-    }
+    Engine.dnnComputing.invokeAndWait2((0 until 1).map(i => () => {
+      lstm3_inf.evaluate()
+      lstm3_inf.setRuntime(new MklDnnRuntime)
+      lstm3_inf.initFwdPrimitives(Array(inputFormat), InferencePhase)
+      for (i <- 1 to params.iteration) {
+        val output = lstm3_inf.forward(input_t)
+      }
+    }))
     val end3_inf = System.nanoTime()
 
     logger.info("[Bi Sum 1 Layer] result: ")
@@ -412,15 +419,16 @@ object DistriPerf {
     val lstm4 = RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize,
       f, direction, layers = 5)
 
-    lstm4.setRuntime(new MklDnnRuntime)
-    lstm4.initFwdPrimitives(Array(inputFormat), TrainingPhase)
-    lstm4.initBwdPrimitives(Array(gradOutputFormat), TrainingPhase)
-
     val start4 = System.nanoTime()
-    for (i <- 1 to params.iteration) {
-      val output = lstm4.forward(input_t)
-      val gradInput = lstm4.backward(input_t, gradOutput_t)
-    }
+    Engine.dnnComputing.invokeAndWait2((0 until 1).map(i => () => {
+      lstm4.setRuntime(new MklDnnRuntime)
+      lstm4.initFwdPrimitives(Array(inputFormat), TrainingPhase)
+      lstm4.initBwdPrimitives(Array(gradOutputFormat), TrainingPhase)
+      for (i <- 1 to params.iteration) {
+        val output = lstm4.forward(input_t)
+        val gradInput = lstm4.backward(input_t, gradOutput_t)
+      }
+    }))
     val end4 = System.nanoTime()
 
     logger.info("[Uni L2R 5 Layers] result: ")
@@ -442,14 +450,15 @@ object DistriPerf {
     val lstm4_inf = RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize,
       f, direction, layers = 5)
 
-    lstm4_inf.evaluate()
-    lstm4_inf.setRuntime(new MklDnnRuntime)
-    lstm4_inf.initFwdPrimitives(Array(inputFormat), TrainingPhase)
-
     val start4_inf = System.nanoTime()
-    for (i <- 1 to params.iteration) {
-      val output = lstm4_inf.forward(input_t)
-    }
+    Engine.dnnComputing.invokeAndWait2((0 until 1).map(i => () => {
+      lstm4_inf.evaluate()
+      lstm4_inf.setRuntime(new MklDnnRuntime)
+      lstm4_inf.initFwdPrimitives(Array(inputFormat), InferencePhase)
+      for (i <- 1 to params.iteration) {
+        val output = lstm4_inf.forward(input_t)
+      }
+    }))
     val end4_inf = System.nanoTime()
 
     logger.info("[Uni L2R 5 Layers] result: ")
@@ -554,6 +563,12 @@ object DistriPerf {
   }
 
   def main(argv: Array[String]): Unit = {
+
+//    MKL.setNumThreads(4)
+//    com.intel.analytics.bigdl.mkl.MklDnn.setNumThreads(4)
+//    Affinity.setOmpAffinity()
+
+
     parser.parse(argv, new DistriPerfParams()).foreach { params =>
       if (params.engineType == "lstm_mkldnn") {
         System.setProperty("bigdl.engineType", "mkldnn")

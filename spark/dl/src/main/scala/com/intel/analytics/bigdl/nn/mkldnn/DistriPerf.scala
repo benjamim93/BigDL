@@ -473,6 +473,120 @@ object DistriPerf {
     println("========================================================================\n\n")
 
     /*
+    val mkldnnLSTMx = Sequential()
+      .add(Input(Array(params.seqLength, params.batchSize, params.commonSize), Memory.Format.tnc))
+      .add(RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize, f, direction, layers = 1))
+      .add(RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize, f, direction, layers = 1))
+      .add(RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize, f, direction, layers = 1))
+      .add(RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize, f, direction, layers = 1))
+      .add(RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize, f, direction, layers = 1))
+
+    val startx_inf = System.nanoTime()
+    Engine.dnnComputing.invokeAndWait2((0 until 1).map(i => () => {
+      mkldnnLSTMx.evaluate()
+      mkldnnLSTMx.compile(InferencePhase)
+
+      for (i <- 1 to params.iteration) {
+        val outputx = mkldnnLSTMx.forward(input_t)
+      }
+    }))
+    val endx_inf = System.nanoTime()
+
+    logger.info("[Uni L2R 5 Layers X] result: ")
+    logger.info(s"Use java thread ${params.model} isNNRecurrent" +
+      s"${model.isInstanceOf[nn.Recurrent[Float]]} " +
+      s"isMKLDNNLSTM ${model.isInstanceOf[RNN]} engineType ${Engine.getEngineType()} " +
+      s"batchSize ${params.batchSize} ")
+    logger.info(s"Average Throughput is: " +
+      s"${params.batchSize.toDouble * params.iteration / (endx_inf - startx_inf) * 1e9}" +
+      s"record / second.")
+
+    println("========================================================================\n\n")
+
+    val mkldnnLSTMxt = Sequential()
+      .add(Input(Array(params.seqLength, params.batchSize, params.commonSize), Memory.Format.tnc))
+      .add(RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize, f, direction, layers = 1))
+      .add(RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize, f, direction, layers = 1))
+      .add(RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize, f, direction, layers = 1))
+      .add(RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize, f, direction, layers = 1))
+      .add(RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize, f, direction, layers = 1))
+
+    val startxt_inf = System.nanoTime()
+    Engine.dnnComputing.invokeAndWait2((0 until 1).map(i => () => {
+      mkldnnLSTMxt.compile(TrainingPhase)
+
+      for (i <- 1 to params.iteration) {
+        val outputxt = mkldnnLSTMxt.forward(input_t)
+        val gradInputxt = mkldnnLSTMxt.backward(input_t, gradOutput_t)
+      }
+    }))
+    val endxt_inf = System.nanoTime()
+
+    logger.info("[Uni L2R 5 Layers Xt] result: ")
+    logger.info(s"Use java thread ${params.model} isNNRecurrent" +
+      s"${model.isInstanceOf[nn.Recurrent[Float]]} " +
+      s"isMKLDNNLSTM ${model.isInstanceOf[RNN]} engineType ${Engine.getEngineType()} " +
+      s"batchSize ${params.batchSize} ")
+    logger.info(s"Average Throughput is: " +
+      s"${params.batchSize.toDouble * params.iteration / (endxt_inf - startxt_inf) * 1e9}" +
+      s"record / second.")
+
+    println("========================================================================\n\n")
+
+    val mkldnnLSTMs = Sequential()
+      .add(Input(Array(params.seqLength, params.batchSize, params.commonSize), Memory.Format.tnc))
+      .add(RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize, f, direction, layers = 5))
+
+    val starts_inf = System.nanoTime()
+    Engine.dnnComputing.invokeAndWait2((0 until 1).map(i => () => {
+      mkldnnLSTMs.evaluate()
+      mkldnnLSTMs.compile(InferencePhase)
+
+      for (i <- 1 to params.iteration) {
+        val outputs = mkldnnLSTMs.forward(input_t)
+      }
+    }))
+    val ends_inf = System.nanoTime()
+
+    logger.info("[Uni L2R 5 Layers S] result: ")
+    logger.info(s"Use java thread ${params.model} isNNRecurrent" +
+      s"${model.isInstanceOf[nn.Recurrent[Float]]} " +
+      s"isMKLDNNLSTM ${model.isInstanceOf[RNN]} engineType ${Engine.getEngineType()} " +
+      s"batchSize ${params.batchSize} ")
+    logger.info(s"Average Throughput is: " +
+      s"${params.batchSize.toDouble * params.iteration / (ends_inf - starts_inf) * 1e9}" +
+      s"record / second.")
+
+    println("========================================================================\n\n")
+
+    val mkldnnLSTMst = Sequential()
+      .add(Input(Array(params.seqLength, params.batchSize, params.commonSize), Memory.Format.tnc))
+      .add(RNN(AlgKind.VanillaLstm, params.commonSize, params.commonSize, f, direction, layers = 5))
+
+    val startst_inf = System.nanoTime()
+    Engine.dnnComputing.invokeAndWait2((0 until 1).map(i => () => {
+      mkldnnLSTMst.compile(TrainingPhase)
+
+      for (i <- 1 to params.iteration) {
+        val outputst = mkldnnLSTMst.forward(input_t)
+        val gradInputst = mkldnnLSTMst.backward(input_t, gradOutput_t)
+      }
+    }))
+    val endst_inf = System.nanoTime()
+
+    logger.info("[Uni L2R 5 Layers St] result: ")
+    logger.info(s"Use java thread ${params.model} isNNRecurrent" +
+      s"${model.isInstanceOf[nn.Recurrent[Float]]} " +
+      s"isMKLDNNLSTM ${model.isInstanceOf[RNN]} engineType ${Engine.getEngineType()} " +
+      s"batchSize ${params.batchSize} ")
+    logger.info(s"Average Throughput is: " +
+      s"${params.batchSize.toDouble * params.iteration / (endst_inf - startst_inf) * 1e9}" +
+      s"record / second.")
+
+    println("========================================================================\n\n")
+    */
+
+    /*
     time = 0
 
     direction = Direction.BidirectionalConcat

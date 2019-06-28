@@ -138,7 +138,7 @@ object PTBModel {
       outputFormat = HeapData(shapeNTC2, Memory.Format.ntc),
       gradInputFormat = HeapData(shapeNTC2, Memory.Format.ntc),
       gradOutputFomat = HeapData(shapeTNC2, Memory.Format.tnc)
-    ).inputs(ntc2tnc)
+    ).inputs(lstm)
 
     val linear = Linear[Float](hiddenSize, outputSize)
     val output = BlasWrapper(TimeDistributed[Float](linear)).inputs(tnc2ntc)

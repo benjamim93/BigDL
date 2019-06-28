@@ -25,6 +25,7 @@ import com.intel.analytics.bigdl.utils.Engine
 import org.apache.spark.SparkContext
 import com.intel.analytics.bigdl.example.languagemodel.Utils.{TrainParams, trainParser}
 import com.intel.analytics.bigdl.models.rnn.SequencePreprocess
+import com.intel.analytics.bigdl.nn.{Linear, TimeDistributed}
 import com.intel.analytics.bigdl.nn.mkldnn.Phase.TrainingPhase
 import com.intel.analytics.bigdl.optim._
 
@@ -88,6 +89,7 @@ object PTBModel {
         .setOptimMethod(optimMethod)
         .setEndWhen(Trigger.maxEpoch(param.nEpochs))
         .optimize()
+
       sc.stop()
     })
   }
@@ -109,33 +111,37 @@ object PTBModel {
       Dropout(keepProb).inputs((embeddingLookup))
     } else embeddingLookup
 
-    val shapeNTC = Array(batchSize, numSteps, inputSize)
-    val shapeTNC = Array(numSteps, batchSize, inputSize)
+    val shapeNTC1 = Array(batchSize, numSteps, hiddenSize)
+    val shapeTNC1 = Array(numSteps, batchSize, hiddenSize)
 
     val ntc2tnc = ReorderMemory(
-      inputFormat = HeapData(shapeNTC, Memory.Format.ntc),
-      outputFormat = HeapData(shapeTNC, Memory.Format.tnc),
-      gradInputFormat = HeapData(shapeTNC, Memory.Format.tnc),
-      gradOutputFomat = HeapData(shapeNTC, Memory.Format.ntc)
+      inputFormat = HeapData(shapeNTC1, Memory.Format.ntc),
+      outputFormat = HeapData(shapeTNC1, Memory.Format.tnc),
+      gradInputFormat = HeapData(shapeTNC1, Memory.Format.tnc),
+      gradOutputFomat = HeapData(shapeNTC1, Memory.Format.ntc)
     ).inputs(inputs)
 
     val lstm = RNN(
       mode = AlgKind.VanillaLstm,
-      inputSize = inputSize,
+      inputSize = hiddenSize,
       hiddenSize = hiddenSize,
       f = AlgKind.EltwiseTanh,
       direction = Direction.UnidirectionalLeft2Right,
       layers = numLayers
     ).inputs(ntc2tnc)
 
-    val tnc2ntc = ReorderMemory(
-      inputFormat = HeapData(shapeTNC, Memory.Format.tnc),
-      outputFormat = HeapData(shapeNTC, Memory.Format.ntc),
-      gradInputFormat = HeapData(shapeNTC, Memory.Format.ntc),
-      gradOutputFomat = HeapData(shapeTNC, Memory.Format.tnc)
-    ).inputs(lstm)
+    val shapeNTC2 = Array(batchSize, numSteps, hiddenSize)
+    val shapeTNC2 = Array(numSteps, batchSize, hiddenSize)
 
-    val output = Linear(hiddenSize, outputSize).inputs(tnc2ntc)
+    val tnc2ntc = ReorderMemory(
+      inputFormat = HeapData(shapeTNC2, Memory.Format.tnc),
+      outputFormat = HeapData(shapeNTC2, Memory.Format.ntc),
+      gradInputFormat = HeapData(shapeNTC2, Memory.Format.ntc),
+      gradOutputFomat = HeapData(shapeTNC2, Memory.Format.tnc)
+    ).inputs(ntc2tnc)
+
+    val linear = Linear[Float](hiddenSize, outputSize)
+    val output = BlasWrapper(TimeDistributed[Float](linear)).inputs(tnc2ntc)
 
     DnnGraph(Seq(input), Seq(output))
   }

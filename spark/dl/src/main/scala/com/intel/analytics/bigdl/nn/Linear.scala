@@ -81,6 +81,13 @@ class Linear[T: ClassTag](
     zeroGradParameters()
   }
 
+  override def computeOutputShape(inputShape: Shape): Shape = {
+    val input = inputShape.toSingle().toArray
+    require(input.length == 2,
+      s"LookupTable requires 2D input, but got input dim ${input.length}")
+    Shape(input(0), outputSize)
+  }
+
   override def updateOutput(input: Tensor[T]): Tensor[T] = {
     require(input.dim() == 1 || input.dim() == 2,
       "Linear: " + ErrorInfo.constrainInputAsVectorOrBatch +

@@ -21,7 +21,7 @@ import com.intel.analytics.bigdl.optim.Regularizer
 import com.intel.analytics.bigdl.tensor.Tensor
 import com.intel.analytics.bigdl.tensor.TensorNumericMath.TensorNumeric
 import com.intel.analytics.bigdl.utils.RandomGenerator._
-import com.intel.analytics.bigdl.utils.{T, Table}
+import com.intel.analytics.bigdl.utils.{Shape, T, Table}
 
 import scala.reflect.ClassTag
 
@@ -165,6 +165,13 @@ class LookupTable[T: ClassTag]
       count.update(k, ev.plus(count.valueAt(k), ev.one))
       i += 1
     }
+  }
+
+  override def computeOutputShape(inputShape: Shape): Shape = {
+    val input = inputShape.toSingle().toArray
+    require(input.length == 3,
+      s"LookupTable requires 3D input, but got input dim ${input.length}")
+    Shape(input(0), input(1), nOutput)
   }
 
   override def updateOutput(input: Tensor[T]): Tensor[T] = {

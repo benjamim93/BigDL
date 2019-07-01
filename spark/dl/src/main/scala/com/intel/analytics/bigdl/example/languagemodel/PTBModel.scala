@@ -17,6 +17,7 @@
 package com.intel.analytics.bigdl.example.languagemodel
 
 import com.intel.analytics.bigdl.Module
+import com.intel.analytics.bigdl.mkl.Memory
 import com.intel.analytics.bigdl.nn.Graph._
 import com.intel.analytics.bigdl.nn.{TimeDistributed, _}
 
@@ -48,15 +49,18 @@ object PTBModel {
     val input = Input[Float]()
     val embeddingLookup = LookupTable[Float](inputSize, hiddenSize).inputs(input)
 
-    val inputs = if (keepProb < 1) {
-      Dropout[Float](keepProb).inputs(embeddingLookup)
-    } else embeddingLookup
+    val inputs = embeddingLookup
+//    if (keepProb < 1) {
+//      Dropout[Float](keepProb).inputs(embeddingLookup)
+//    } else embeddingLookup
 
     val lstm = addLayer(hiddenSize, hiddenSize, 1, numLayers, inputs)
     val linear = Linear[Float](hiddenSize, outputSize)
     val output = TimeDistributed[Float](linear).inputs(lstm)
 
-    Graph(input, output)
+    val model = Graph(input, output)
+    model.asInstanceOf[StaticGraph[Float]].setInputFormats(Seq(Memory.Format.nc))
+    model.asInstanceOf[StaticGraph[Float]].setOutputFormats(Seq(Memory.Format.ntc))
   }
 
   private def addLayer(inputSize: Int,

@@ -29,12 +29,16 @@ import org.apache.spark.SparkContext
 import scopt.OptionParser
 import com.intel.analytics.bigdl.nn
 import com.intel.analytics.bigdl.nn.abstractnn.{AbstractModule, Activity}
-import scala.collection.mutable.ArrayBuffer
 
-object DistriPerf {
+import scala.collection.mutable.ArrayBuffer
+import com.intel.analytics.bigdl.mkl.AlgKind
+import com.intel.analytics.bigdl.mkl.Direction
+import com.intel.analytics.bigdl.nn.mkldnn.Phase.TrainingPhase
+
+object DistriPerf_lstm {
   val logger = Logger.getLogger(getClass)
 
-  val parser = new OptionParser[DistriPerfParams]("BigDL w/ Dnn Local Model Performance Test") {
+  val parser = new OptionParser[DistriPerflstmParams]("BigDL w/ Dnn Local Model Performance Test") {
     opt[Int]('b', "batchSize")
       .text("Batch size of input data")
       .action((v, p) => p.copy(batchSize = v))
@@ -91,24 +95,23 @@ object DistriPerf {
     }
   }
 
-  def blasPredict(params: DistriPerfParams, sc: SparkContext, miniBatch: MiniBatch[Float]): Unit = {
+  def blasPredict(params: DistriPerflstmParams, sc: SparkContext, miniBatch: MiniBatch[Float]):
+  Unit = {
     val subModelNumber = Engine.coreNumber()
 
-    val model = PTBModel.lstm(
-      params.inputSize,
-      params.hiddenSize,
-      params.outputSize,
-      params.numLayers)
+    val input = nn.Input[Float]()
+    val output = nn.Recurrent().add(nn.LSTM(params.hiddenSize, params.hiddenSize)).inputs(input)
+    val model = nn.Graph(input, output)
 
     val workingModels = if (subModelNumber != 1) {
-      // val wb = Util.getAndClearWeightBias(model.parameters())
+      val wb = Util.getAndClearWeightBias(model.parameters())
       val models = (1 to subModelNumber).map(i => {
         logger.info(s"Clone $i model...")
         val m = model.cloneModule()
-        // Util.putWeightBias(wb, m)
+        Util.putWeightBias(wb, m)
         m
       }).toArray
-      // Util.putWeightBias(wb, model)
+      Util.putWeightBias(wb, model)
       models
     } else {
       Array(model)
@@ -149,14 +152,14 @@ object DistriPerf {
         () => {
           val localModel = workingModels(i)
           val data = inputBuffer(i)
-          val s1 = System.nanoTime()
+          // val s1 = System.nanoTime()
           localModel.forward(data.getInput())
           localModel.backward(data.getInput(), data.getTarget())
-          val e1 = System.nanoTime() - s1
-          getTopTimes(localModel.getTimes(), e1)
-          println(s"iteration time ${e1/1e9}")
-          println('\n')
-          localModel.resetTimes()
+//          val e1 = System.nanoTime() - s1
+//          getTopTimes(localModel.getTimes(), e1)
+//          println(s"iteration time ${e1/1e9}")
+//          println('\n')
+//          localModel.resetTimes()
           1
         }))
       Engine.default.sync(results)
@@ -169,34 +172,28 @@ object DistriPerf {
       s" records / second")
   }
 
-  def dnnPredict(params: DistriPerfParams, sc: SparkContext, miniBatch: MiniBatch[Float]): Unit = {
-//    val inputShape = Array(params.batchSize, params.seqLength)
-//    val outputShape = Array(params.batchSize, params.seqLength, params.outputSize)
+  def dnnPredict(params: DistriPerflstmParams, sc: SparkContext, miniBatch: MiniBatch[Float]):
+  Unit = {
+    val inputShape = Array(params.seqLength, params.batchSize, params.hiddenSize)
+    val outputShape = Array(params.seqLength, params.batchSize, params.hiddenSize)
 
-    val model = PTBModel.lstm(
-      inputSize = params.inputSize,
-      hiddenSize = params.hiddenSize,
-      outputSize = params.outputSize,
-      numLayers = params.numLayers)
+    val f = AlgKind.EltwiseTanh
+    var direction = Direction.UnidirectionalLeft2Right
 
-    model.asInstanceOf[nn.StaticGraph[Float]]
-      .setInputFormats(Seq(Memory.Format.nc))
-      .setOutputFormats(Seq(Memory.Format.ntc))
-      .toIRgraph()
+    val input = Input(inputShape, Memory.Format.tnc).inputs()
+    val lstm = RNN(AlgKind.VanillaLstm, params.hiddenSize,
+      params.hiddenSize, f, direction, layers = params.numLayers).inputs(input)
+    val mkldnn_model = DnnGraph(Seq(input), Seq(lstm))
 
     println(s"\nstart predict throughput test [Uni L2R ${params.numLayers} Layer(s)]: ")
 
     val start = System.nanoTime()
     Engine.dnnComputing.invokeAndWait2((0 until 1).map(i => () => {
+      mkldnn_model.compile(TrainingPhase)
+
       for (i <- 1 to params.iteration) {
-        val s1 = System.nanoTime()
-        model.forward(miniBatch.getInput())
-        model.backward(miniBatch.getInput(), miniBatch.getTarget())
-        val e1 = System.nanoTime() - s1
-        getTopTimes(model.getTimes(), e1)
-        println(s"iteration time ${e1/1e9}")
-        println('\n')
-        model.resetTimes()
+        mkldnn_model.forward(miniBatch.getInput())
+        mkldnn_model.backward(miniBatch.getInput(), miniBatch.getTarget())
       }
     }))
     val end = System.nanoTime()
@@ -208,7 +205,7 @@ object DistriPerf {
   }
 
   def main(argv: Array[String]): Unit = {
-    parser.parse(argv, new DistriPerfParams()).foreach { params =>
+    parser.parse(argv, new DistriPerflstmParams()).foreach { params =>
       println("batchSize = " + params.batchSize)
       println("iterations = " + params.iteration)
       println("seqLength = " + params.seqLength)
@@ -235,18 +232,15 @@ object DistriPerf {
       Engine.init
       Engine.setNodeAndCore(Engine.nodeNumber(), Engine.coreNumber())
 
-      val input = Tensor[Float](Array(params.batchSize, params.seqLength))
-      for (n <- 1 to params.batchSize) {
-        for (t <- 1 to params.seqLength) {
-          input(Array(n, t)) = scala.util.Random.nextInt(params.inputSize) + 1
-        }
-      }
-
       RNG.setSeed(100)
-      val gradOutput = Tensor[Float](Array(params.batchSize, params.seqLength, params.outputSize))
-        .rand()
-
-      val minibatch = MiniBatch(input, gradOutput)
+      val minibatch = if (params.engineType == "mkldnn") {
+        val TNCshape = Array(params.seqLength, params.batchSize, params.hiddenSize)
+        MiniBatch(Tensor[Float](TNCshape).rand(), Tensor[Float](TNCshape).rand())
+      }
+      else {
+        val NTCshape = Array(params.batchSize, params.seqLength, params.hiddenSize)
+        MiniBatch(Tensor[Float](NTCshape).rand(), Tensor[Float](NTCshape).rand())
+      }
 
       if (params.engineType == "mkldnn") {
         dnnPredict(params, sc, minibatch)
@@ -259,7 +253,7 @@ object DistriPerf {
   }
 }
 
-case class DistriPerfParams (
+case class DistriPerflstmParams (
   batchSize: Int = 20,
   iteration: Int = 100,
   seqLength: Int = 300,
@@ -272,4 +266,3 @@ case class DistriPerfParams (
   model: String = "vanilla_lstm",
   threadPredict: Boolean = true
 )
-

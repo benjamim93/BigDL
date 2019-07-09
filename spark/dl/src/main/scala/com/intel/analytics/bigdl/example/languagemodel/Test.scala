@@ -16,19 +16,22 @@
 
 package com.intel.analytics.bigdl.example.languagemodel
 
+import java.awt.geom.Point2D
+
 import com.intel.analytics.bigdl._
 import com.intel.analytics.bigdl.dataset.text.{LabeledSentenceToSample, _}
 import com.intel.analytics.bigdl.dataset.{DataSet, SampleToMiniBatch}
 import com.intel.analytics.bigdl.nn.{CrossEntropyCriterion, Module, TimeDistributedCriterion}
 import com.intel.analytics.bigdl.optim._
 import com.intel.analytics.bigdl.tensor.TensorNumericMath.TensorNumeric._
-import com.intel.analytics.bigdl.utils.Engine
+import com.intel.analytics.bigdl.utils.{Engine, MklDnn}
 import org.apache.log4j.{Level, Logger}
 import org.apache.spark.SparkContext
 import com.intel.analytics.bigdl.example.languagemodel.Utils._
 import com.intel.analytics.bigdl.models.rnn.SequencePreprocess
+import com.intel.analytics.bigdl.tensor.Tensor
 
-object PTBWordLM {
+object Test {
   Logger.getLogger("org").setLevel(Level.ERROR)
   Logger.getLogger("akka").setLevel(Level.ERROR)
   Logger.getLogger("breeze").setLevel(Level.ERROR)
@@ -48,72 +51,57 @@ object PTBWordLM {
 
       val trainSet = DataSet.rdd(sc.parallelize(
         SequencePreprocess.reader(trainData, param.numSteps)))
-          .transform(TextToLabeledSentence[Float](param.numSteps))
-          .transform(LabeledSentenceToSample[Float](
-            oneHot = false,
-            fixDataLength = None,
-            fixLabelLength = None))
-        .transform(SampleToMiniBatch[Float](param.batchSize))
-
-      val validationSet = DataSet.rdd(sc.parallelize(
-        SequencePreprocess.reader(validData, param.numSteps)))
         .transform(TextToLabeledSentence[Float](param.numSteps))
         .transform(LabeledSentenceToSample[Float](
           oneHot = false,
           fixDataLength = None,
           fixLabelLength = None))
-        .transform(SampleToMiniBatch[Float](param.batchSize))
+        // .transform(SampleToMiniBatch[Float](param.batchSize))
+        .toDistributed()
+        .data(train = false)
 
-      val model = if (param.modelSnapshot.isDefined) {
-        Module.loadModule[Float](param.modelSnapshot.get)
-      } else if (param.withTransformerModel) {
-        PTBModel.transformer(
-          inputSize = param.vocabSize,
-          hiddenSize = param.hiddenSize,
-          outputSize = param.vocabSize,
-          numLayers = param.numLayers,
-          keepProb = param.keepProb)
-      } else {
-        PTBModel.lstm(
-          inputSize = param.vocabSize,
-          hiddenSize = param.hiddenSize,
-          outputSize = param.vocabSize,
-          numLayers = param.numLayers,
-          keepProb = param.keepProb)
-          .asInstanceOf[nn.StaticGraph[Float]].toIRgraph()
-      }
+//      val validationSet = DataSet.rdd(sc.parallelize(
+//        SequencePreprocess.reader(validData, param.numSteps)))
+//        .transform(TextToLabeledSentence[Float](param.numSteps))
+//        .transform(LabeledSentenceToSample[Float](
+//          oneHot = false,
+//          fixDataLength = None,
+//          fixLabelLength = None))
+//        .transform(SampleToMiniBatch[Float](param.batchSize))
 
-      val optimMethod = if (param.stateSnapshot.isDefined) {
-        OptimMethod.load[Float](param.stateSnapshot.get)
-      } else {
-        new Adagrad[Float](learningRate = param.learningRate,
-          learningRateDecay = param.learningRateDecay)
-      }
+//      val testSet = DataSet.rdd(sc.parallelize(
+//        SequencePreprocess.reader(testData, param.numSteps)))
+//        .transform(TextToLabeledSentence[Float](param.numSteps))
+//        .transform(LabeledSentenceToSample[Float](
+//          oneHot = false,
+//          fixDataLength = None,
+//          fixLabelLength = None))
+//        .transform(SampleToMiniBatch[Float](param.batchSize))
 
-      val optimizer = Optimizer(
-        model = model,
-        dataset = trainSet,
-        criterion = TimeDistributedCriterion[Float](
-          CrossEntropyCriterion[Float](), sizeAverage = false, dimension = 1)
-      )
+      // val model = Module.load[Float](param.modelSnapshot.get)
+      val model = PTBModel.lstm(
+        inputSize = param.vocabSize,
+        hiddenSize = param.hiddenSize,
+        outputSize = param.vocabSize,
+        numLayers = param.numLayers,
+        keepProb = param.keepProb)
 
-      if (param.checkpoint.isDefined) {
-        optimizer.setCheckpoint(param.checkpoint.get, Trigger.everyEpoch)
-      }
+      var start = System.nanoTime()
+      val resultdnn = model.evaluate(trainSet, Array(new Loss[Float](
+        TimeDistributedCriterion[Float](
+          CrossEntropyCriterion[Float](),
+          sizeAverage = false, dimension = 1))), batchSize = Some(param.batchSize))
+      resultdnn.foreach(r => println(s"${r._2} is ${r._1}"))
+      var end = System.nanoTime()
+      println(s"Time consumed: ${(end - start) * 1e-9}")
+      println(s"Throughput: ${param.batchSize.toDouble / (end - start) * 1e9}")
 
-      if(param.overWriteCheckpoint) {
-        optimizer.overWriteCheckpoint()
-      }
-
-      optimizer
-        .setValidation(Trigger.everyEpoch, validationSet, Array(new Loss[Float](
-          TimeDistributedCriterion[Float](
-            CrossEntropyCriterion[Float](),
-            sizeAverage = false, dimension = 1))))
-        .setOptimMethod(optimMethod)
-        .setEndWhen(Trigger.maxEpoch(param.nEpochs))
-        .optimize()
       sc.stop()
     })
   }
 }
+
+
+
+
+

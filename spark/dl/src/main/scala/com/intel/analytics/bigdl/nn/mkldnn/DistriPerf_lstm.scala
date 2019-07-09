@@ -33,7 +33,7 @@ import com.intel.analytics.bigdl.nn.abstractnn.{AbstractModule, Activity}
 import scala.collection.mutable.ArrayBuffer
 import com.intel.analytics.bigdl.mkl.AlgKind
 import com.intel.analytics.bigdl.mkl.Direction
-import com.intel.analytics.bigdl.nn.mkldnn.Phase.TrainingPhase
+import com.intel.analytics.bigdl.nn.mkldnn.Phase.{InferencePhase, TrainingPhase}
 
 object DistriPerf_lstm {
   val logger = Logger.getLogger(getClass)
@@ -48,15 +48,9 @@ object DistriPerf_lstm {
     opt[Int]('s', "seqLength")
       .text("The length of sequence")
       .action((v, p) => p.copy(seqLength = v))
-    opt[Int]("inputSize")
-      .text("The size of input")
-      .action((v, p) => p.copy(inputSize = v))
     opt[Int]("hiddenSize")
       .text("The size of hidden state")
       .action((v, p) => p.copy(hiddenSize = v))
-    opt[Int]("outputSize")
-      .text("The size of output")
-      .action((v, p) => p.copy(outputSize = v))
     opt[Int]("numLayers")
       .text("The num of layers")
       .action((v, p) => p.copy(numLayers = v))
@@ -66,6 +60,9 @@ object DistriPerf_lstm {
     opt[String]("engineType")
       .text("Engine type")
       .action((v, p) => p.copy(engineType = v))
+    opt[Boolean]("fused")
+      .text("LSTM layers are fused or not")
+      .action((v, p) => p.copy(fused = v))
   }
 
   def getTopTimes(times: Array[(AbstractModule[_ <: Activity, _ <: Activity, Float],
@@ -166,7 +163,7 @@ object DistriPerf_lstm {
     }
     val end = System.nanoTime()
 
-    logger.info(s"[Uni L2R ${params.numLayers} Layer(s)] result: ")
+    logger.info(s"[NOT fused] result: ")
     logger.info(s"Average Throughput" +
       s"is ${params.batchSize.toDouble * params.iteration / (end - start) * 1e9}" +
       s" records / second")
@@ -175,33 +172,69 @@ object DistriPerf_lstm {
   def dnnPredict(params: DistriPerflstmParams, sc: SparkContext, miniBatch: MiniBatch[Float]):
   Unit = {
     val inputShape = Array(params.seqLength, params.batchSize, params.hiddenSize)
-    val outputShape = Array(params.seqLength, params.batchSize, params.hiddenSize)
 
     val f = AlgKind.EltwiseTanh
     var direction = Direction.UnidirectionalLeft2Right
 
-    val input = Input(inputShape, Memory.Format.tnc).inputs()
-    val lstm = RNN(AlgKind.VanillaLstm, params.hiddenSize,
-      params.hiddenSize, f, direction, layers = params.numLayers).inputs(input)
-    val mkldnn_model = DnnGraph(Seq(input), Seq(lstm))
+    if (params.fused) {
+      val input = Input(inputShape, Memory.Format.tnc).inputs()
+      val lstm = RNN(AlgKind.VanillaLstm, params.hiddenSize,
+        params.hiddenSize, f, direction, layers = params.numLayers).inputs(input)
+      val mkldnn_model = DnnGraph(Seq(input), Seq(lstm))
 
-    println(s"\nstart predict throughput test [Uni L2R ${params.numLayers} Layer(s)]: ")
+      println(s"\nstart predict throughput test [Uni L2R ${params.numLayers} Layer(s)]: ")
 
-    val start = System.nanoTime()
-    Engine.dnnComputing.invokeAndWait2((0 until 1).map(i => () => {
-      mkldnn_model.compile(TrainingPhase)
+      Engine.dnnComputing.invokeAndWait2((0 until 1).map(i => () => {
+        mkldnn_model.evaluate()
+        mkldnn_model.compile(InferencePhase)
+        for (i <- 1 to 30) {
+          mkldnn_model.forward(miniBatch.getInput())
+        }
 
-      for (i <- 1 to params.iteration) {
-        mkldnn_model.forward(miniBatch.getInput())
-        mkldnn_model.backward(miniBatch.getInput(), miniBatch.getTarget())
-      }
-    }))
-    val end = System.nanoTime()
+        val start = System.nanoTime()
+        for (i <- 1 to params.iteration) {
+          mkldnn_model.forward(miniBatch.getInput())
+        }
+        val end = System.nanoTime()
 
-    logger.info(s"[Uni L2R ${params.numLayers} Layer(s)] result: ")
-    logger.info(s"Average Throughput" +
-      s"is ${params.batchSize.toDouble * params.iteration / (end - start) * 1e9}" +
-      s" records / second.")
+        logger.info(s"[fused] result: ")
+        logger.info(s"Average Throughput" +
+          s"is ${params.batchSize.toDouble * params.iteration / (end - start) * 1e9}" +
+          s" records / second.")
+      }))
+    }
+
+    else {
+      val input = Input(inputShape, Memory.Format.tnc).inputs()
+      var lstm = RNN(AlgKind.VanillaLstm, params.hiddenSize,
+        params.hiddenSize, f, direction, layers = 1).inputs(input)
+      lstm = RNN(AlgKind.VanillaLstm, params.hiddenSize,
+        params.hiddenSize, f, direction, layers = 1).inputs(lstm)
+      val mkldnn_model = DnnGraph(Seq(input), Seq(lstm))
+
+      println(s"\nstart predict throughput test [Uni L2R ${params.numLayers} Layer(s)]: ")
+
+      Engine.dnnComputing.invokeAndWait2((0 until 1).map(i => () => {
+        mkldnn_model.evaluate()
+        mkldnn_model.compile(InferencePhase)
+        for (i <- 1 to 30) {
+          mkldnn_model.forward(miniBatch.getInput())
+        }
+
+        val start = System.nanoTime()
+        for (i <- 1 to params.iteration) {
+          mkldnn_model.forward(miniBatch.getInput())
+        }
+        val end = System.nanoTime()
+
+        logger.info(s"[NOT fused] result: ")
+        logger.info(s"Average Throughput" +
+          s"is ${params.batchSize.toDouble * params.iteration / (end - start) * 1e9}" +
+          s" records / second.")
+      }))
+    }
+
+
   }
 
   def main(argv: Array[String]): Unit = {
@@ -209,9 +242,7 @@ object DistriPerf_lstm {
       println("batchSize = " + params.batchSize)
       println("iterations = " + params.iteration)
       println("seqLength = " + params.seqLength)
-      println("inputSize = " + params.inputSize)
       println("hiddenSize = " + params.hiddenSize)
-      println("outputSize = " + params.outputSize)
       println("numLayers = " + params.numLayers)
       println("engineType = " + params.engineType)
 
@@ -257,11 +288,10 @@ case class DistriPerflstmParams (
   batchSize: Int = 20,
   iteration: Int = 100,
   seqLength: Int = 300,
-  inputSize: Int = 800,
   hiddenSize: Int = 800,
-  outputSize: Int = 800,
   numLayers: Int = 1,
   threadNum: Int = 1,
+  fused: Boolean = false,
   engineType: String = "mkldnn",
   model: String = "vanilla_lstm",
   threadPredict: Boolean = true

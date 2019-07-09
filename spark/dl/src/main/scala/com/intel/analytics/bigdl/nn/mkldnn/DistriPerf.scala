@@ -19,9 +19,9 @@ package com.intel.analytics.bigdl.nn.mkldnn
 import com.intel.analytics.bigdl.dataset.MiniBatch
 import com.intel.analytics.bigdl.example.languagemodel.PTBModel
 import com.intel.analytics.bigdl.example.languagemodel.PTBModel.addLayer
-import com.intel.analytics.bigdl.mkl.Memory
+import com.intel.analytics.bigdl.mkl.{AlgKind, Direction, Memory}
 import com.intel.analytics.bigdl.numeric.NumericFloat
-import com.intel.analytics.bigdl.tensor.Tensor
+import com.intel.analytics.bigdl.tensor.{DnnTensor, Tensor}
 import com.intel.analytics.bigdl.utils.RandomGenerator._
 import com.intel.analytics.bigdl.utils._
 import org.apache.log4j.Logger
@@ -29,6 +29,9 @@ import org.apache.spark.SparkContext
 import scopt.OptionParser
 import com.intel.analytics.bigdl.nn
 import com.intel.analytics.bigdl.nn.abstractnn.{AbstractModule, Activity}
+import com.intel.analytics.bigdl.nn.mkldnn.Phase.{InferencePhase, TrainingPhase}
+import com.intel.analytics.bigdl.utils.intermediate.IRGraph
+
 import scala.collection.mutable.ArrayBuffer
 
 object DistriPerf {
@@ -44,15 +47,12 @@ object DistriPerf {
     opt[Int]('s', "seqLength")
       .text("The length of sequence")
       .action((v, p) => p.copy(seqLength = v))
-    opt[Int]("inputSize")
-      .text("The size of input")
-      .action((v, p) => p.copy(inputSize = v))
+    opt[Int]("vocabSize")
+      .text("The size of vocabulary")
+      .action((v, p) => p.copy(vocabSize = v))
     opt[Int]("hiddenSize")
       .text("The size of hidden state")
       .action((v, p) => p.copy(hiddenSize = v))
-    opt[Int]("outputSize")
-      .text("The size of output")
-      .action((v, p) => p.copy(outputSize = v))
     opt[Int]("numLayers")
       .text("The num of layers")
       .action((v, p) => p.copy(numLayers = v))
@@ -62,23 +62,33 @@ object DistriPerf {
     opt[String]("engineType")
       .text("Engine type")
       .action((v, p) => p.copy(engineType = v))
+    opt[Boolean]("fused")
+      .text("fused")
+      .action((v, p) => p.copy(fused = v))
+    opt[Boolean]("verbose")
+      .text("verbose")
+      .action((v, p) => p.copy(verbose = v))
+    opt[Boolean]("infer")
+      .text("infer")
+      .action((v, p) => p.copy(infer = v))
   }
 
   def getTopTimes(times: Array[(AbstractModule[_ <: Activity, _ <: Activity, Float],
-    Long, Long)], allSum: Long): Unit = {
+    Long, Long)] // , allSum: Long
+    ): Unit = {
     var forwardSum = 0L
     var backwardSum = 0L
     times.foreach(x => {
       forwardSum += x._2
       backwardSum += x._3
     })
-    println(s"forwardSum = ${forwardSum/1e9} realTime ${allSum/1e9} backwardSum = ${backwardSum/1e9}")
+    // println(s"forwardSum = ${forwardSum/1e9} realTime ${allSum/1e9} backwardSum = ${backwardSum/1e9}")
 
     val timeBuffer = new ArrayBuffer[(AbstractModule[_ <: Activity,
       _ <: Activity, Float], Long)]
     var i = 0
     while (i < times.length) {
-      val rate = times(i)._2.toDouble/ allSum
+      // val rate = times(i)._2.toDouble/ allSum
       timeBuffer.append((times(i)._1, times(i)._2))
       i += 1
     }
@@ -95,20 +105,25 @@ object DistriPerf {
     val subModelNumber = Engine.coreNumber()
 
     val model = PTBModel.lstm(
-      params.inputSize,
+      params.vocabSize,
       params.hiddenSize,
-      params.outputSize,
+      params.vocabSize,
       params.numLayers)
 
     val workingModels = if (subModelNumber != 1) {
-      // val wb = Util.getAndClearWeightBias(model.parameters())
+      val wb = Util.getAndClearWeightBias(model.parameters())
       val models = (1 to subModelNumber).map(i => {
         logger.info(s"Clone $i model...")
         val m = model.cloneModule()
-        // Util.putWeightBias(wb, m)
+        Util.putWeightBias(wb, m)
+        m.asInstanceOf[nn.Graph[Float]]
+          .modules(1)
+          .asInstanceOf[nn.LookupTable[Float]]
+          .gradWeight = Tensor[Float](params.vocabSize, params.hiddenSize).zero()
         m
       }).toArray
-      // Util.putWeightBias(wb, model)
+      Util.putWeightBias(wb, model)
+
       models
     } else {
       Array(model)
@@ -129,82 +144,181 @@ object DistriPerf {
 
     // warm up
     println(s"engine default pool size ${Engine.default.getPoolSize}")
-    val warmup = 20
+    val warmup = 30
     val warmpResults = Engine.default.invoke((0 until subModelNumber).map(i =>
       () => {
         val localModel = workingModels(i)
         val data = inputBuffer(i)
         for (w <- 0 to warmup) {
           localModel.forward(data.getInput())
-          localModel.backward(data.getInput(), data.getTarget())
+          if (!params.infer) {
+            localModel.backward(data.getInput(), data.getTarget())
+          }
         }
         1
       }))
     Engine.default.sync(warmpResults)
 
-    println(s"start predict throughput test [Uni L2R ${params.numLayers} Layer(s)]: ")
+    println(s"start predict throughput test [PTBModel-LSTM BLAS]: ")
     val start = System.nanoTime()
     for (it <- 0 to params.iteration) {
       val results = Engine.default.invoke((0 until subModelNumber).map(i =>
         () => {
           val localModel = workingModels(i)
           val data = inputBuffer(i)
-          val s1 = System.nanoTime()
-          localModel.forward(data.getInput())
-          localModel.backward(data.getInput(), data.getTarget())
-          val e1 = System.nanoTime() - s1
-          getTopTimes(localModel.getTimes(), e1)
-          println(s"iteration time ${e1/1e9}")
-          println('\n')
-          localModel.resetTimes()
+          if (params.verbose) {
+            // val s1 = System.nanoTime()
+            localModel.forward(data.getInput())
+            if (!params.infer) {
+              localModel.backward(data.getInput(), data.getTarget())
+            }
+            // val e1 = System.nanoTime()
+            getTopTimes(localModel.getTimes())
+            // println(s"iteration time ${(e1 - s1)/1e9}")
+            println('\n')
+            localModel.resetTimes()
+          }
+          else {
+            localModel.forward(data.getInput())
+            if (!params.infer) {
+              localModel.backward(data.getInput(), data.getTarget())
+            }
+          }
           1
         }))
       Engine.default.sync(results)
     }
     val end = System.nanoTime()
 
-    logger.info(s"[Uni L2R ${params.numLayers} Layer(s)] result: ")
+    println(s"Avg iteration time: ${(end - start)/(params.iteration * 1e9) } sec(s)")
+
+    logger.info(s"[PTBModel-LSTM BLAS] result: ")
     logger.info(s"Average Throughput" +
       s"is ${params.batchSize.toDouble * params.iteration / (end - start) * 1e9}" +
       s" records / second")
   }
 
   def dnnPredict(params: DistriPerfParams, sc: SparkContext, miniBatch: MiniBatch[Float]): Unit = {
-//    val inputShape = Array(params.batchSize, params.seqLength)
-//    val outputShape = Array(params.batchSize, params.seqLength, params.outputSize)
+    val model = if (!params.fused) {
+        PTBModel.lstm(
+        inputSize = params.vocabSize,
+        hiddenSize = params.hiddenSize,
+        outputSize = params.vocabSize,
+        numLayers = params.numLayers)
+        .asInstanceOf[nn.StaticGraph[Float]]
+        .setInputFormats(Seq(Memory.Format.nc))
+        .setOutputFormats(Seq(Memory.Format.ntc))
+        .toIRgraph()
+    }
 
-    val model = PTBModel.lstm(
-      inputSize = params.inputSize,
-      hiddenSize = params.hiddenSize,
-      outputSize = params.outputSize,
-      numLayers = params.numLayers)
+    else {
+      val f = AlgKind.EltwiseTanh
+      var direction = Direction.UnidirectionalLeft2Right
 
-    model.asInstanceOf[nn.StaticGraph[Float]]
-      .setInputFormats(Seq(Memory.Format.nc))
-      .setOutputFormats(Seq(Memory.Format.ntc))
-      .toIRgraph()
+      val input = Input(Array(params.batchSize, params.seqLength), Memory.Format.nc).inputs()
+      val embeddingLookup = BlasWrapper(nn.LookupTable[Float](params.vocabSize, params.hiddenSize))
+        .inputs(input)
+      val lstm = RNN(AlgKind.VanillaLstm, params.hiddenSize,
+        params.hiddenSize, f, direction, layers = params.numLayers).inputs(embeddingLookup)
+      val linear = nn.Linear(params.hiddenSize, params.vocabSize)
+      val output = BlasWrapper(nn.TimeDistributed[Float](linear)).inputs(lstm)
 
-    println(s"\nstart predict throughput test [Uni L2R ${params.numLayers} Layer(s)]: ")
+      DnnGraph(Seq(input), Seq(output))
+    }
 
-    val start = System.nanoTime()
-    Engine.dnnComputing.invokeAndWait2((0 until 1).map(i => () => {
-      for (i <- 1 to params.iteration) {
-        val s1 = System.nanoTime()
-        model.forward(miniBatch.getInput())
-        model.backward(miniBatch.getInput(), miniBatch.getTarget())
-        val e1 = System.nanoTime() - s1
-        getTopTimes(model.getTimes(), e1)
-        println(s"iteration time ${e1/1e9}")
-        println('\n')
-        model.resetTimes()
+    println(s"\nstart predict throughput test [PTBModel-LSTM MKLDNN]: ")
+
+    if(params.fused) {
+      Engine.dnnComputing.invokeAndWait2((0 until 1).map(i => () => {
+        if (params.infer) {
+          model.evaluate()
+          model.asInstanceOf[DnnGraph].compile(InferencePhase)
+        }
+        else {
+          model.asInstanceOf[DnnGraph].compile(TrainingPhase)
+        }
+
+        for (i <- 1 to 30) {
+          model.forward(miniBatch.getInput())
+          if (!params.infer) {
+            model.backward(miniBatch.getInput(), miniBatch.getTarget())
+          }
+        }
+
+        val start = System.nanoTime()
+        for (i <- 1 to params.iteration) {
+          if (params.verbose) {
+            // val s1 = System.nanoTime()
+            model.forward(miniBatch.getInput())
+            if (!params.infer) {
+              model.backward(miniBatch.getInput(), miniBatch.getTarget())
+            }
+            // val e1 = System.nanoTime()
+            getTopTimes(model.getTimes())
+            // println(s"iteration time ${(e1 - s1)/1e9}")
+            println('\n')
+            model.resetTimes()
+          }
+          else {
+            model.forward(miniBatch.getInput())
+            if (!params.infer) {
+              model.backward(miniBatch.getInput(), miniBatch.getTarget())
+            }
+          }
+        }
+        val end = System.nanoTime()
+
+        println(s"Avg iteration time: ${(end - start)/(params.iteration * 1e9)} sec(s)")
+
+        logger.info(s"[PTBModel-LSTM MKLDNN (fused)] result: ")
+        logger.info(s"Average Throughput" +
+          s" is ${params.batchSize.toDouble * params.iteration / (end - start) * 1e9}" +
+          s" records / second.")
+      }))
+    }
+
+    else {
+      if (params.infer) {
+        model.evaluate()
       }
-    }))
-    val end = System.nanoTime()
 
-    logger.info(s"[Uni L2R ${params.numLayers} Layer(s)] result: ")
-    logger.info(s"Average Throughput" +
-      s"is ${params.batchSize.toDouble * params.iteration / (end - start) * 1e9}" +
-      s" records / second.")
+      for (i <- 1 to 30) {
+        model.forward(miniBatch.getInput())
+        if (!params.infer) {
+          model.backward(miniBatch.getInput(), miniBatch.getTarget())
+        }
+      }
+
+      val start = System.nanoTime()
+      for (i <- 1 to params.iteration) {
+        if (params.verbose) {
+          // val s1 = System.nanoTime()
+          model.forward(miniBatch.getInput())
+          if (!params.infer) {
+            model.backward(miniBatch.getInput(), miniBatch.getTarget())
+          }
+          // val e1 = System.nanoTime()
+          getTopTimes(model.getTimes())
+          // println(s"iteration time ${(e1 - s1)/1e9}")
+          println('\n')
+          model.resetTimes()
+        }
+        else {
+          model.forward(miniBatch.getInput())
+          if (!params.infer) {
+            model.backward(miniBatch.getInput(), miniBatch.getTarget())
+          }
+        }
+      }
+      val end = System.nanoTime()
+
+      println(s"Avg iteration time: ${(end - start)/(params.iteration * 1e9)} sec(s)")
+
+      logger.info(s"[PTBModel-LSTM MKLDNN (NOT fused)] result: ")
+      logger.info(s"Average Throughput" +
+        s" is ${params.batchSize.toDouble * params.iteration / (end - start) * 1e9}" +
+        s" records / second.")
+    }
   }
 
   def main(argv: Array[String]): Unit = {
@@ -212,9 +326,8 @@ object DistriPerf {
       println("batchSize = " + params.batchSize)
       println("iterations = " + params.iteration)
       println("seqLength = " + params.seqLength)
-      println("inputSize = " + params.inputSize)
+      println("inputSize = " + params.vocabSize)
       println("hiddenSize = " + params.hiddenSize)
-      println("outputSize = " + params.outputSize)
       println("numLayers = " + params.numLayers)
       println("engineType = " + params.engineType)
 
@@ -238,12 +351,12 @@ object DistriPerf {
       val input = Tensor[Float](Array(params.batchSize, params.seqLength))
       for (n <- 1 to params.batchSize) {
         for (t <- 1 to params.seqLength) {
-          input(Array(n, t)) = scala.util.Random.nextInt(params.inputSize) + 1
+          input(Array(n, t)) = scala.util.Random.nextInt(params.vocabSize) + 1
         }
       }
 
       RNG.setSeed(100)
-      val gradOutput = Tensor[Float](Array(params.batchSize, params.seqLength, params.outputSize))
+      val gradOutput = Tensor[Float](Array(params.batchSize, params.seqLength, params.vocabSize))
         .rand()
 
       val minibatch = MiniBatch(input, gradOutput)
@@ -263,11 +376,13 @@ case class DistriPerfParams (
   batchSize: Int = 20,
   iteration: Int = 100,
   seqLength: Int = 300,
-  inputSize: Int = 800,
+  vocabSize: Int = 800,
   hiddenSize: Int = 800,
-  outputSize: Int = 800,
   numLayers: Int = 1,
   threadNum: Int = 1,
+  fused: Boolean = false,
+  verbose: Boolean = false,
+  infer: Boolean = false,
   engineType: String = "mkldnn",
   model: String = "vanilla_lstm",
   threadPredict: Boolean = true

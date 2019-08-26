@@ -32,10 +32,11 @@ import scala.collection.mutable.ArrayBuffer
 
 import com.intel.analytics.bigdl.nn
 
-object DistriPerf {
+object DistriPerfBlasInfer {
   val logger = Logger.getLogger(getClass)
 
-  val parser = new OptionParser[DistriPerfParams]("BigDL Dnn/BLAS Local Model Performance Test") {
+  val parser = new OptionParser[DistriPerfBlasInferParams](
+    "BigDL Dnn/BLAS Local Model Performance Test") {
     opt[String]("engine")
       .text("mklblas | mkldnn")
       .action((v, p) => p.copy(engineType = v))
@@ -85,17 +86,17 @@ object DistriPerf {
   }
 
   def predict(model: Module[Float], input: MiniBatch[Float],
-              params: DistriPerfParams): Unit = {
+              params: DistriPerfBlasInferParams): Unit = {
     val subModelNumber = Engine.coreNumber()
 
-    // model.evaluate()
+    model.evaluate()
     val workingModels = if (subModelNumber != 1) {
       val wb = Util.getAndClearWeightBias(model.parameters())
       val models = (1 to subModelNumber).map(i => {
         logger.info(s"Clone $i model...")
         val m = model.cloneModule()
         Util.putWeightBias(wb, m)
-        // m.evaluate()
+        m.evaluate()
         m
       }).toArray
       Util.putWeightBias(wb, model)
@@ -117,33 +118,17 @@ object DistriPerf {
       b += 1
     }
 
-    val gradOutputShape =
-      if (params.blasModelType == "unil2r1"
-        || params.blasModelType == "unil2r5"
-        || params.blasModelType == "bisum1") {
-        Array(params.batchSize, params.seqLength, params.commonSize)
-      }
-      else {
-        Array( params.batchSize, params.seqLength, 2 * params.commonSize)
-      }
-
     // warm up
     println(s"engine default pool size ${Engine.default.getPoolSize}")
     val warmup = 20
     val warmpResults = Engine.default.invoke((0 until subModelNumber).map(i =>
       () => {
-        // val localModel = workingModels(i).evaluate()
-        val localModel = workingModels(i)
+        val localModel = workingModels(i).evaluate()
         val data = inputBuffer(i)
         val datainput = data.getInput()
 
-        val gradOutput = Tensor(
-          Array(datainput.toTensor.size(1), gradOutputShape(1), gradOutputShape(2)))
-          .rand(1.0, 1.0)
-
         for (i <- 0 to warmup) {
-          val output = localModel.forward(datainput)
-          val gradinput = localModel.backward(datainput, gradOutput)
+          localModel.forward(datainput)
         }
         1
       }))
@@ -159,12 +144,7 @@ object DistriPerf {
           val data = inputBuffer(i)
           val datainput = data.getInput()
 
-          val gradOutput = Tensor(
-            Array(datainput.toTensor.size(1), gradOutputShape(1), gradOutputShape(2)))
-            .rand(1.0, 1.0)
-
-          val output = localModel.forward(datainput)
-          val gradinput = localModel.backward(datainput, gradOutput)
+          localModel.forward(datainput)
 
           // time += (end - start)
 
@@ -183,12 +163,12 @@ object DistriPerf {
       s"isMKLDNN-GRU ${model.isInstanceOf[RNN]} engineType ${Engine.getEngineType()} " +
       s"batchSize ${params.batchSize} " + s"Average Throughput" +
       s"is ${params.batchSize.toDouble * params.iteration / (end - start) * 1e9} " +
-      s"record / second [FWD + BWD]."
+      s"record / second [FWD]."
     )
   }
 
   def dnnPredict(model: Module[Float], input: MiniBatch[Float],
-                 params: DistriPerfParams): Unit = {
+                 params: DistriPerfBlasInferParams): Unit = {
     println("\nstart predict throughput test [Uni L2R 1 Layer]: ")
     val f = AlgKind.EltwiseTanh
     var direction = Direction.UnidirectionalLeft2Right
@@ -438,7 +418,7 @@ object DistriPerf {
     println("========================================================================\n\n")
   }
 
-  def threadPredict(params: DistriPerfParams, sc: SparkContext, modelLoad: Module[Float]): Unit = {
+  def threadPredict(params: DistriPerfBlasInferParams, sc: SparkContext, modelLoad: Module[Float]): Unit = {
     println("inputSize = " + params.commonSize)
     println("hiddenSize = " + params.commonSize)
     println("batchSize = " + params.batchSize)
@@ -473,7 +453,7 @@ object DistriPerf {
     //    com.intel.analytics.bigdl.mkl.MklDnn.setNumThreads(4)
     //    Affinity.setOmpAffinity()
 
-    parser.parse(argv, new DistriPerfParams()).foreach { params =>
+    parser.parse(argv, new DistriPerfBlasInferParams()).foreach { params =>
       if (params.engineType == "mkldnn") {
         System.setProperty("bigdl.engineType", "mkldnn")
       }
@@ -588,7 +568,7 @@ object DistriPerf {
   }
 }
 
-case class DistriPerfParams (
+case class DistriPerfBlasInferParams (
   batchSize: Int = 20,
   iteration: Int = 300,
   commonSize: Int = 80,

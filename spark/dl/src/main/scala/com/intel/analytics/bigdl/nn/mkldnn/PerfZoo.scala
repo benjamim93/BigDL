@@ -56,10 +56,11 @@ object PerfZoo {
 
     Engine.init
 
-    val model = Module.loadModule[Float](
-      "/home/mengceng/bigdl_models/imgcls/vgg-19_imagenet")
-    model.asInstanceOf[nn.StaticGraph[Float]].setInputFormats(Seq(Memory.Format.nchw))
-    model.asInstanceOf[nn.StaticGraph[Float]].setOutputFormats(Seq(Memory.Format.nc))
+    var model = Module.loadModule[Float](
+      "/home/mengceng/zoo_models/imgcls/analytics-zoo_mobilenet-v2_imagenet_0.1.0.model")
+     model = model.toGraph()
+     model.asInstanceOf[nn.StaticGraph[Float]].setInputFormats(Seq(Memory.Format.nchw))
+     model.asInstanceOf[nn.StaticGraph[Float]].setOutputFormats(Seq(Memory.Format.nc))
     val model_ir = model.asInstanceOf[nn.StaticGraph[Float]].toIRgraph()
     model_ir.evaluate()
 

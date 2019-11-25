@@ -21,7 +21,7 @@ import com.intel.analytics.bigdl.dataset.{DataSet, MiniBatch, Sample}
 import com.intel.analytics.bigdl.mkl.{MKL, Memory, MklDnn}
 import com.intel.analytics.bigdl.nn.Graph._
 import com.intel.analytics.bigdl.nn
-import com.intel.analytics.bigdl.nn.Module
+import com.intel.analytics.bigdl.nn.{Module, StaticGraph}
 import com.intel.analytics.bigdl.nn.abstractnn.Activity
 import com.intel.analytics.bigdl.nn.mkldnn.Phase.{InferencePhase, TrainingPhase}
 import com.intel.analytics.bigdl.nn.mkldnn.ResNet.DatasetType.ImageNet
@@ -46,45 +46,71 @@ object PerfZoo {
     System.setProperty("bigdl.localMode", "true")
     System.setProperty("bigdl.engineType", "mkldnn")
 
-    /*
     val conf = Engine.createSparkConf()
       .setAppName("testzoo")
       .setMaster("local[*]")
       .set("spark.task.maxFailures", "1")
     val sc = new SparkContext(conf)
-    */
 
     Engine.init
 
     var model = Module.loadModule[Float](
-      "/home/mengceng/zoo_models/imgcls/analytics-zoo_mobilenet-v2_imagenet_0.1.0.model")
-     model = model.toGraph()
-     model.asInstanceOf[nn.StaticGraph[Float]].setInputFormats(Seq(Memory.Format.nchw))
-     model.asInstanceOf[nn.StaticGraph[Float]].setOutputFormats(Seq(Memory.Format.nc))
-    val model_ir = model.asInstanceOf[nn.StaticGraph[Float]].toIRgraph()
+       "/home/mengceng/zoo_models/imgcls/analytics-zoo_densenet-161_imagenet_0.1.0.model")
+
+    /*
+    val graph = model.toGraph().asInstanceOf[StaticGraph[Float]]
+    val main_graph = graph.inputs(0).nextNodes(0).element.asInstanceOf[StaticGraph[Float]]
+
+    val new_inputs = main_graph.inputs
+
+    val main_graph_outputs = main_graph.outputs
+    val new_outputs = graph.inputs(0).nextNodes(0).nextNodes(0)
+    val main_graph_dummynode = main_graph_outputs(0).nextNodes(1)
+
+    new_outputs.removePrevEdges()
+    new_outputs.removeNextEdges()
+
+    main_graph_dummynode.add(new_outputs)
+
+    val new_graph = nn.Graph(new_inputs.toArray, new_outputs)
+    new_graph.evaluate()
+    new_graph.asInstanceOf[nn.StaticGraph[Float]]
+      .setInputFormats(Seq(Memory.Format.nchw, Memory.Format.nc))
+    new_graph.asInstanceOf[nn.StaticGraph[Float]].setOutputFormats(Seq(Memory.Format.nc))
+    val model_ir = new_graph.asInstanceOf[nn.StaticGraph[Float]].toIRgraph()
     model_ir.evaluate()
 
     val num_channel = 3
     val img_size = 224
 
-    val input = Tensor[Float](1, num_channel, img_size, img_size).fill(0.8f)
-    /*
-    val label = Tensor[Float](1).fill(1.0f)
-    val data = Sample(input, label)
+    val input = Tensor[Float](1, num_channel, img_size, img_size).rand()
+    val input_imginfo = Tensor[Float](T(T(img_size.toFloat, img_size.toFloat, 1.0, 1.0)))
 
-    val dataset = new Array[Sample[Float]](1)
-    dataset(0) = Sample(input, label)
-
-    val dataSet = DataSet.array(dataset, sc).toDistributed().data(train = false)
-
-    val output = model_ir.evaluate(dataSet,
-      Array(new Top1Accuracy[Float](),
-            new Top5Accuracy[Float](),
-            new Loss[Float](CrossEntropyCriterion[Float]())))
-      }
+    val output = model_ir.forward(T(input, input_imginfo))
+    println()
     */
+    model.evaluate()
+    model.asInstanceOf[nn.StaticGraph[Float]].setInputFormats(Seq(Memory.Format.nchw))
+    model.asInstanceOf[nn.StaticGraph[Float]].setOutputFormats(Seq(Memory.Format.nchw))
+//    val model_ir = model.asInstanceOf[nn.StaticGraph[Float]].toIRgraph()
+//    model_ir.evaluate()
 
-    val output = model_ir.forward(input)
+    val num_channel = 3
+    val img_size = 224
+
+    import com.intel.analytics.bigdl.transform.vision.image.ImageFrame
+    import com.intel.analytics.bigdl.transform.vision.image.ImageFeature
+
+    // val input = Tensor[Float](1, num_channel, img_size, img_size).rand()
+    //    val output = model.forward(input)
+
+    import com.intel.analytics.bigdl.tensor.Tensor
+    val imf = ImageFeature()
+    imf(ImageFeature.imageTensor) = Tensor[Float](Array(3, 224, 224)).rand()
+    val input = ImageFrame.array(Array(imf))
+    //    val file = new File("/home/mengceng/zoo_imgs/image.jpeg")
+    //    val input = ImageFrame.read("/home/mengceng/zoo_imgs/image.jpeg", sc, 1)
+    val output = model.predictImage(input)
 
     println()
   }

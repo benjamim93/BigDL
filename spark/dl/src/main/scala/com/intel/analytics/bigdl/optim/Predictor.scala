@@ -127,8 +127,10 @@ object Predictor {
     val dummyInput = getDummyData(imageFrame.rdd, batchPerPartition)
     val totalBatch = imageFrame.rdd.partitions.length * batchPerPartition
     val rdd = ConversionUtils.coalesce(imageFrame.asInstanceOf[DistributedImageFrame].rdd)
+
+    val test = ConversionUtils.convert(model.evaluate())
     val modelBroad = ModelBroadcast[T]().broadcast(rdd.sparkContext,
-      ConversionUtils.convert(model.evaluate()), dummyInput)
+      test, dummyInput)
 
     val realPartitionLength = rdd.partitions.length
     val toBatchBroad = rdd.sparkContext.broadcast(SampleToMiniBatch(

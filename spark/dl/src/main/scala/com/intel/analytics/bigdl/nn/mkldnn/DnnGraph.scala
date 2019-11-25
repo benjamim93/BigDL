@@ -419,6 +419,7 @@ class DnnGraph(
       if (!skipPrimitiveId(i)) {
         val m = forwardExecution(i)
         lastOutputFormats = findInputFormats(m, inputs)
+        println(i)
         val realInputAndOutputFormats =
           m.element.asInstanceOf[MklDnnModule].initFwdPrimitives(lastOutputFormats, phase)
         lastOutputFormats.zip(realInputAndOutputFormats._1).foreach {

@@ -20,7 +20,7 @@ import com.intel.analytics.bigdl.nn.abstractnn.AbstractModule
 import com.intel.analytics.bigdl.tensor.Tensor
 import com.intel.analytics.bigdl.tensor.TensorNumericMath.TensorNumeric
 import com.intel.analytics.bigdl.transform.vision.image.util.BboxUtil
-import com.intel.analytics.bigdl.utils.Table
+import com.intel.analytics.bigdl.utils.{Shape, Table}
 
 /**
  * Outputs object detection proposals by applying estimated bounding-box

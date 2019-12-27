@@ -72,6 +72,30 @@ abstract class AbstractModule[A <: Activity: ClassTag, B <: Activity: ClassTag, 
    */
   var gradInput: A = Activity.allocate[A, T]()
 
+  // debug
+  protected var inputsFormats: Seq[Int] = null
+  protected var outputsFormats: Seq[Int] = null
+
+  /**
+   * set input formats for graph
+   * @param formats
+   * @return
+   */
+  def setInputFormats(formats: Seq[Int]): this.type = {
+    inputsFormats = formats
+    this
+  }
+
+  /**
+   * set output formats for graph
+   * @param formats
+   * @return
+   */
+  def setOutputFormats(formats: Seq[Int]): this.type = {
+    outputsFormats = formats
+    this
+  }
+
   /**
    * Get the scale of gradientWeight
    */
@@ -808,16 +832,6 @@ abstract class AbstractModule[A <: Activity: ClassTag, B <: Activity: ClassTag, 
     processInputs(nodes)
   }
 
-  // debug
-  def toGraphInputs(nodes : ModuleNode[T]*): ModuleNode[T] = {
-    processInputs(nodes)
-  }
-
-  def toGraphInputs(nodes : Array[ModuleNode[T]]): ModuleNode[T] = {
-    processInputs(nodes)
-  }
-  // debug
-
   /**
    * Build graph: some other modules point to current module
    * @param first distinguish from another inputs when input parameter list is empty
@@ -838,12 +852,20 @@ abstract class AbstractModule[A <: Activity: ClassTag, B <: Activity: ClassTag, 
   def toGraph(startNodes: ModuleNode[T]*): Graph[T] = {
     val starts = if (startNodes.isEmpty) Array(Input[T]()) else startNodes.toArray
     val endNodes = this.getEndNodes(starts)
-    val graph = Graph(starts, endNodes)
+    var graph = Graph(starts, endNodes)
     if (graph.isInstanceOf[StaticGraph[T]]) {
-      graph.asInstanceOf[StaticGraph[T]].toSingleGraph()
-    } else {
-      graph
+      graph = graph.asInstanceOf[StaticGraph[T]].toSingleGraph()
     }
+
+    if (inputsFormats != null) {
+      graph.setInputFormats(inputsFormats)
+    }
+
+    if (outputsFormats != null) {
+      graph.setOutputFormats(outputsFormats)
+    }
+
+    graph
   }
 
   /**
@@ -1120,7 +1142,7 @@ abstract class AbstractModule[A <: Activity: ClassTag, B <: Activity: ClassTag, 
   private[bigdl] def getEndNodes(startNodes: Array[ModuleNode[T]]): Array[ModuleNode[T]] = {
     // debug
     // val endNodes = Array(this.inputs(startNodes: _*))
-    val endNodes = Array(this.toGraphInputs(startNodes: _*))
+    val endNodes = Array(this.processInputs(startNodes))
     // debug
     endNodes
   }

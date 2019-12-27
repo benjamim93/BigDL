@@ -172,7 +172,7 @@ abstract class KerasLayer[A <: Activity: ClassTag, B <: Activity: ClassTag, T: C
     if (this.isKerasGraph()) {
       this.toGraph().getEndNodes(startNodes)
     } else if (labor.isKerasStyle() && labor.getName().equals(this.getName())) {
-      Array(this.toGraphInputs(startNodes))
+      Array(this.processInputs(startNodes))
     } else {
       labor.getEndNodes(startNodes)
     }
@@ -196,18 +196,34 @@ abstract class KerasLayer[A <: Activity: ClassTag, B <: Activity: ClassTag, T: C
           fwdExecutions(i).element = layer.labor
         }
       }
-      graph.toSingleGraph()
+      val result = graph.toSingleGraph()
+      if (inputsFormats != null) {
+        result.setInputFormats(inputsFormats)
+      }
+
+      if (inputsFormats != null) {
+        result.setOutputFormats(outputsFormats)
+      }
+      result
     } else if (this.isKerasSequential()) {
       val starts = if (startNodes.isEmpty) Array(TInput[T]()) else startNodes.toArray
       val endNodes = this.getEndNodes(starts)
       // Disable excludeInvalidLayers to allow customized Keras layers
-      new StaticGraph(starts, endNodes, enableExcludeChecking = false).toSingleGraph()
+      val result = new StaticGraph(starts, endNodes, enableExcludeChecking = false).toSingleGraph()
+      if (inputsFormats != null) {
+        result.setInputFormats(inputsFormats)
+      }
+
+      if (outputsFormats != null) {
+        result.setOutputFormats(outputsFormats)
+      }
+      result
     } else {
       this.labor.toGraph()
     }
   }
 
-  def isKerasGraph(): Boolean = {
+  private def isKerasGraph(): Boolean = {
     if (labor.isInstanceOf[StaticGraph[T]]) {
       val fwdExecutions = labor.asInstanceOf[StaticGraph[T]].getForwardExecutions()
       for (i <- 0 until fwdExecutions.length) {
@@ -221,7 +237,7 @@ abstract class KerasLayer[A <: Activity: ClassTag, B <: Activity: ClassTag, T: C
     }
   }
 
-  def isKerasSequential(): Boolean = {
+  private def isKerasSequential(): Boolean = {
     if (labor.isInstanceOf[TSequential[T]]) {
       for (i <- 0 until labor.asInstanceOf[TSequential[T]].modules.length) {
         if (!labor.asInstanceOf[TSequential[T]].modules(i).isKerasStyle()) {
@@ -234,7 +250,7 @@ abstract class KerasLayer[A <: Activity: ClassTag, B <: Activity: ClassTag, T: C
     }
   }
 
-  def isKerasContainer(): Boolean = {
+  private def isKerasContainer(): Boolean = {
     isKerasGraph() || isKerasSequential()
   }
 
@@ -255,12 +271,7 @@ abstract class KerasLayer[A <: Activity: ClassTag, B <: Activity: ClassTag, T: C
  // scalastyle:on
 
   override def parameters(): (Array[Tensor[T]], Array[Tensor[T]]) = {
-//    if (this.modules.length > 1) {
-//      super.parameters()
-//    }
-//    else {
     labor.parameters()
-//    }
   }
 
   override def updateOutput(input: A): B = {

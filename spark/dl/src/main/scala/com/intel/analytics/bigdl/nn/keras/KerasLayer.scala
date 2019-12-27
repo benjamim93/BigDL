@@ -255,12 +255,12 @@ abstract class KerasLayer[A <: Activity: ClassTag, B <: Activity: ClassTag, T: C
  // scalastyle:on
 
   override def parameters(): (Array[Tensor[T]], Array[Tensor[T]]) = {
-    if (this.modules.length > 1) {
-      super.parameters()
-    }
-    else {
-      labor.parameters()
-    }
+//    if (this.modules.length > 1) {
+//      super.parameters()
+//    }
+//    else {
+    labor.parameters()
+//    }
   }
 
   override def updateOutput(input: A): B = {
